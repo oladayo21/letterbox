@@ -27,14 +27,14 @@ type Attachment struct {
 	EmailID     pgtype.UUID `json:"email_id"`
 	Filename    string      `json:"filename"`
 	ContentType string      `json:"content_type"`
-	Size        int32       `json:"size"`
+	Size        int64       `json:"size"`
 	S3Key       string      `json:"s3_key"`
 }
 
 type Email struct {
 	ID              pgtype.UUID        `json:"id"`
 	AccountID       pgtype.UUID        `json:"account_id"`
-	Uid             int32              `json:"uid"`
+	Uid             int64              `json:"uid"`
 	MessageID       *string            `json:"message_id"`
 	Folder          string             `json:"folder"`
 	Subject         *string            `json:"subject"`
