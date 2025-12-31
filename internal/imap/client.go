@@ -3,6 +3,7 @@ package imap
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -12,16 +13,22 @@ import (
 )
 
 var (
-	ErrConnectionFailed = errors.New("failed to connect to IMAP server")
-	ErrTLSFailed        = errors.New("TLS handshake failed")
-	ErrAuthFailed       = errors.New("authentication failed")
-	ErrTimeout          = errors.New("connection timed out")
+	ErrConnectionFailed  = errors.New("failed to connect to IMAP server")
+	ErrTLSFailed         = errors.New("TLS handshake failed")
+	ErrAuthFailed        = errors.New("authentication failed")
+	ErrTimeout           = errors.New("connection timed out")
+	ErrListFoldersFailed = errors.New("failed to list folders")
 )
 
 const defaultTimeout = 30 * time.Second
 
 type ConnectionResult struct {
 	Folders []string
+}
+
+type dialResult struct {
+	client *imapclient.Client
+	err    error
 }
 
 func TestConnection(ctx context.Context, host string, port int, user, password string) (*ConnectionResult, error) {
@@ -42,10 +49,7 @@ func TestConnection(ctx context.Context, host string, port int, user, password s
 	var client *imapclient.Client
 	var err error
 
-	connCh := make(chan struct {
-		client *imapclient.Client
-		err    error
-	}, 1)
+	connCh := make(chan dialResult, 1)
 
 	go func() {
 		var c *imapclient.Client
@@ -57,10 +61,15 @@ func TestConnection(ctx context.Context, host string, port int, user, password s
 			c, e = imapclient.DialStartTLS(addr, opts)
 		}
 
-		connCh <- struct {
-			client *imapclient.Client
-			err    error
-		}{c, e}
+		select {
+		case connCh <- dialResult{c, e}:
+			// Result delivered
+		default:
+			// Context cancelled, clean up
+			if c != nil {
+				c.Close()
+			}
+		}
 	}()
 
 	select {
@@ -92,7 +101,7 @@ func TestConnection(ctx context.Context, host string, port int, user, password s
 	mailboxes, err := client.List("", "*", nil).Collect()
 
 	if err != nil {
-		return nil, fmt.Errorf("listing folders: %w", err)
+		return nil, fmt.Errorf("%w: %v", ErrListFoldersFailed, err)
 	}
 
 	folders := make([]string, 0, len(mailboxes))
@@ -109,38 +118,21 @@ func TestConnection(ctx context.Context, host string, port int, user, password s
 }
 
 func isTimeoutError(err error) bool {
-
-	if err == nil {
-		return false
-	}
-
 	var netErr net.Error
 
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
-	}
-
-	return false
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func isTLSError(err error) bool {
+	var recordErr *tls.RecordHeaderError
+	var certVerifyErr *tls.CertificateVerificationError
+	var unknownAuthErr x509.UnknownAuthorityError
+	var hostnameErr x509.HostnameError
+	var certInvalidErr x509.CertificateInvalidError
 
-	if err == nil {
-		return false
-	}
-
-	var tlsErr *tls.RecordHeaderError
-
-	if errors.As(err, &tlsErr) {
-		return true
-	}
-
-	// Check for certificate errors
-	var certErr *tls.CertificateVerificationError
-
-	if errors.As(err, &certErr) {
-		return true
-	}
-
-	return false
+	return errors.As(err, &recordErr) ||
+		errors.As(err, &certVerifyErr) ||
+		errors.As(err, &unknownAuthErr) ||
+		errors.As(err, &hostnameErr) ||
+		errors.As(err, &certInvalidErr)
 }
