@@ -39,6 +39,24 @@ gh pr create --title "Story X.Y: Short description" --body "..."
 
 ---
 
+## Handling PR Review Comments
+
+When review comments are raised:
+
+1. **Evaluate first** - determine if the issue is valid
+   - Does it contradict the spec?
+   - Is it a real bug or style preference?
+   - Does the suggested fix break something else?
+
+2. **Respond before acting**
+   - If valid: acknowledge and fix
+   - If invalid: explain why with evidence (spec reference, test results)
+   - If unclear: ask for clarification
+
+3. **Never blindly fix** - reviewer comments are suggestions, not commands
+
+---
+
 ## Story Completion Checklist
 
 Before marking story complete:
