@@ -9,9 +9,9 @@
 
 ---
 
-## Workflow: Branch-per-Story
+## Workflow: Branch → PR → Merge
 
-**Every story = separate branch**
+**Every story = separate branch + PR**
 
 ```bash
 # Start story
@@ -20,19 +20,22 @@ git pull
 git checkout -b story/X.Y-short-description
 
 # Work on story tasks
-# ...
+# ... commit as you go ...
 
-# Only merge when ALL acceptance criteria met
-git checkout main
-git merge story/X.Y-short-description
+# When ready, push and open PR
+git push -u origin story/X.Y-short-description
+gh pr create --title "Story X.Y: Short description" --body "..."
 ```
 
-**Never merge to main until:**
+**PR merge requirements:**
 - [ ] All tasks in story checked off
 - [ ] All acceptance criteria pass
 - [ ] `make build` succeeds
 - [ ] `make test` passes
-- [ ] Code compiles without errors
+- [ ] All PR comments resolved
+- [ ] No open issues on the PR
+
+**Never merge directly to main. Always via PR.**
 
 ---
 
@@ -81,7 +84,7 @@ Memory location: `~/omnibank/claude-memory/letterbox.md`
 ## Rules
 
 1. One story at a time
-2. Branch per story
-3. No partial merges
+2. Branch per story, always PR to merge
+3. Never merge with unresolved PR comments
 4. Update memory after each session
 5. Follow story dependencies (see STORIES.md dependency graph)

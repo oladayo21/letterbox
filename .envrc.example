@@ -1,0 +1,22 @@
+# Copy to .envrc and fill in values
+# Run: direnv allow
+
+# Server
+export PORT=8080
+
+# Database
+export DATABASE_URL=postgres://letterbox:letterbox@localhost:5434/letterbox?sslmode=disable
+
+# S3 Storage (Minio for local dev)
+export S3_ENDPOINT=http://localhost:9000
+export S3_BUCKET=letterbox
+export S3_ACCESS_KEY=minioadmin
+export S3_SECRET_KEY=minioadmin
+export S3_REGION=us-east-1
+
+# Encryption key for IMAP/SMTP credentials (32 bytes, base64 encoded)
+# Generate: openssl rand -base64 32
+export LETTERBOX_ENCRYPTION_KEY=
+
+# API Authentication
+export API_KEY=
