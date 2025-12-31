@@ -47,22 +47,6 @@ make migrate-down  # Rollback migration
 make sqlc          # Regenerate database code
 ```
 
-## API Overview
-
-```
-GET    /accounts                     # List accounts
-POST   /accounts                     # Add account
-DELETE /accounts/{id}                # Remove account
-
-GET    /accounts/{id}/folders        # List folders
-GET    /accounts/{id}/messages/{uid} # Get message
-
-POST   /webhooks                     # Subscribe to notifications
-DELETE /webhooks/{id}                # Unsubscribe
-
-GET    /search?q=...                 # Full-text search
-```
-
 ## Tech Stack
 
 - **Language**: Go
