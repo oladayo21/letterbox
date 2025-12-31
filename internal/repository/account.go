@@ -14,22 +14,35 @@ import (
 	"github.com/oladayo21/letterbox/internal/domain"
 )
 
-var ErrAccountNotFound = errors.New("account not found")
+var (
+	ErrAccountNotFound    = errors.New("account not found")
+	ErrInvalidKey         = errors.New("encryption key must be 32 bytes")
+	ErrEmptyImapPassword  = errors.New("imap password is required")
+)
 
 type AccountRepository struct {
 	queries       *db.Queries
 	encryptionKey []byte
 }
 
-func NewAccountRepository(queries *db.Queries, encryptionKey []byte) *AccountRepository {
+func NewAccountRepository(queries *db.Queries, encryptionKey []byte) (*AccountRepository, error) {
+
+	if len(encryptionKey) != 32 {
+		return nil, fmt.Errorf("%w: got %d bytes", ErrInvalidKey, len(encryptionKey))
+	}
 
 	return &AccountRepository{
 		queries:       queries,
 		encryptionKey: encryptionKey,
-	}
+	}, nil
 }
 
 func (r *AccountRepository) Create(ctx context.Context, input domain.CreateAccountInput) (*domain.Account, error) {
+
+	if input.ImapPassword == "" {
+		return nil, ErrEmptyImapPassword
+	}
+
 	encryptedImapPass, err := crypto.Encrypt(input.ImapPassword, r.encryptionKey)
 
 	if err != nil {
@@ -96,7 +109,7 @@ func (r *AccountRepository) List(ctx context.Context) ([]domain.Account, error) 
 		acc, err := r.toAccount(dbAcc)
 
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("account %q (id=%v): %w", dbAcc.Name, dbAcc.ID.Bytes, err)
 		}
 
 		accounts = append(accounts, *acc)

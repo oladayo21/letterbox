@@ -2,6 +2,7 @@ package repository_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -43,9 +44,48 @@ func setupTestDB(t *testing.T) *db.Queries {
 	return db.New(pool)
 }
 
+func mustNewRepo(t *testing.T, queries *db.Queries, key []byte) *repository.AccountRepository {
+	t.Helper()
+
+	repo, err := repository.NewAccountRepository(queries, key)
+
+	if err != nil {
+		t.Fatalf("NewAccountRepository failed: %v", err)
+	}
+
+	return repo
+}
+
+func TestNewAccountRepository_InvalidKey(t *testing.T) {
+	queries := setupTestDB(t)
+
+	tests := []struct {
+		name string
+		key  []byte
+	}{
+		{"empty", []byte{}},
+		{"too short", []byte("short")},
+		{"too long", []byte("12345678901234567890123456789012extra")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := repository.NewAccountRepository(queries, tt.key)
+
+			if err == nil {
+				t.Error("expected error for invalid key")
+			}
+
+			if !errors.Is(err, repository.ErrInvalidKey) {
+				t.Errorf("expected ErrInvalidKey, got %v", err)
+			}
+		})
+	}
+}
+
 func TestAccountRepository_Create(t *testing.T) {
 	queries := setupTestDB(t)
-	repo := repository.NewAccountRepository(queries, testEncryptionKey)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
 	ctx := context.Background()
 
 	input := domain.CreateAccountInput{
@@ -83,9 +123,33 @@ func TestAccountRepository_Create(t *testing.T) {
 	}
 }
 
+func TestAccountRepository_Create_EmptyImapPassword(t *testing.T) {
+	queries := setupTestDB(t)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
+	ctx := context.Background()
+
+	input := domain.CreateAccountInput{
+		Name:         "Empty Password Test",
+		ImapHost:     "imap.example.com",
+		ImapPort:     993,
+		ImapUser:     "user@example.com",
+		ImapPassword: "", // Empty
+	}
+
+	_, err := repo.Create(ctx, input)
+
+	if err == nil {
+		t.Error("expected error for empty imap password")
+	}
+
+	if !errors.Is(err, repository.ErrEmptyImapPassword) {
+		t.Errorf("expected ErrEmptyImapPassword, got %v", err)
+	}
+}
+
 func TestAccountRepository_Get(t *testing.T) {
 	queries := setupTestDB(t)
-	repo := repository.NewAccountRepository(queries, testEncryptionKey)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
 	ctx := context.Background()
 
 	input := domain.CreateAccountInput{
@@ -117,9 +181,41 @@ func TestAccountRepository_Get(t *testing.T) {
 	}
 }
 
+func TestAccountRepository_Get_WrongKey(t *testing.T) {
+	queries := setupTestDB(t)
+	ctx := context.Background()
+
+	// Create with one key
+	repo1 := mustNewRepo(t, queries, testEncryptionKey)
+
+	input := domain.CreateAccountInput{
+		Name:         "Wrong Key Test",
+		ImapHost:     "imap.test.com",
+		ImapPort:     993,
+		ImapUser:     "test@test.com",
+		ImapPassword: "password123",
+	}
+
+	created, err := repo1.Create(ctx, input)
+
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Try to read with different key
+	differentKey := []byte("abcdefghijklmnopqrstuvwxyz123456") // Different 32-byte key
+	repo2 := mustNewRepo(t, queries, differentKey)
+
+	_, err = repo2.Get(ctx, created.ID)
+
+	if err == nil {
+		t.Error("expected error when decrypting with wrong key")
+	}
+}
+
 func TestAccountRepository_Get_NotFound(t *testing.T) {
 	queries := setupTestDB(t)
-	repo := repository.NewAccountRepository(queries, testEncryptionKey)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
 	ctx := context.Background()
 
 	_, err := repo.Get(ctx, [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
@@ -131,7 +227,7 @@ func TestAccountRepository_Get_NotFound(t *testing.T) {
 
 func TestAccountRepository_List(t *testing.T) {
 	queries := setupTestDB(t)
-	repo := repository.NewAccountRepository(queries, testEncryptionKey)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
 	ctx := context.Background()
 
 	inputs := []domain.CreateAccountInput{
@@ -164,9 +260,25 @@ func TestAccountRepository_List(t *testing.T) {
 	}
 }
 
+func TestAccountRepository_List_Empty(t *testing.T) {
+	queries := setupTestDB(t)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
+	ctx := context.Background()
+
+	accounts, err := repo.List(ctx)
+
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+
+	if len(accounts) != 0 {
+		t.Errorf("len = %d, want 0", len(accounts))
+	}
+}
+
 func TestAccountRepository_Delete(t *testing.T) {
 	queries := setupTestDB(t)
-	repo := repository.NewAccountRepository(queries, testEncryptionKey)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
 	ctx := context.Background()
 
 	input := domain.CreateAccountInput{
@@ -198,7 +310,7 @@ func TestAccountRepository_Delete(t *testing.T) {
 
 func TestAccountRepository_Delete_NotFound(t *testing.T) {
 	queries := setupTestDB(t)
-	repo := repository.NewAccountRepository(queries, testEncryptionKey)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
 	ctx := context.Background()
 
 	err := repo.Delete(ctx, [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16})
@@ -210,7 +322,7 @@ func TestAccountRepository_Delete_NotFound(t *testing.T) {
 
 func TestAccountRepository_PasswordsStoredEncrypted(t *testing.T) {
 	queries := setupTestDB(t)
-	repo := repository.NewAccountRepository(queries, testEncryptionKey)
+	repo := mustNewRepo(t, queries, testEncryptionKey)
 	ctx := context.Background()
 
 	plaintextPassword := "my-secret-password"
