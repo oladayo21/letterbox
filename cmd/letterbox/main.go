@@ -3,20 +3,21 @@ package main
 import (
 	"log"
 	"net/http"
-	"os"
+
+	"github.com/oladayo21/letterbox/internal/config"
 )
 
 func main() {
-	port := os.Getenv("PORT")
+	cfg, err := config.Load()
 
-	if port == "" {
-		port = "8080"
+	if err != nil {
+		log.Fatalf("config error: %v", err)
 	}
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
 
-	log.Printf("letterbox starting on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Printf("letterbox starting on :%s", cfg.Port)
+	log.Fatal(http.ListenAndServe(":"+cfg.Port, nil))
 }
