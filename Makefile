@@ -1,7 +1,9 @@
-.PHONY: build run test migrate-up migrate-down migrate-create clean help
+.PHONY: build run test migrate-up migrate-down migrate-create clean help sqlc
 
 BINARY=letterbox
 BUILD_DIR=bin
+MIGRATIONS_DIR=migrations
+DATABASE_URL ?= postgres://letterbox:letterbox@localhost:5434/letterbox?sslmode=disable
 
 ## help: Show this help
 help:
@@ -25,15 +27,20 @@ test:
 
 ## migrate-up: Run all migrations
 migrate-up:
-	@echo "Migrations not yet configured"
+	migrate -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" up
 
 ## migrate-down: Rollback last migration
 migrate-down:
-	@echo "Migrations not yet configured"
+	migrate -path $(MIGRATIONS_DIR) -database "$(DATABASE_URL)" down 1
 
 ## migrate-create: Create new migration (usage: make migrate-create name=create_users)
 migrate-create:
-	@echo "Migrations not yet configured"
+	@test -n "$(name)" || (echo "Usage: make migrate-create name=<migration_name>" && exit 1)
+	migrate create -ext sql -dir $(MIGRATIONS_DIR) -seq $(name)
+
+## sqlc: Generate sqlc code
+sqlc:
+	sqlc generate
 
 ## clean: Remove build artifacts
 clean:
