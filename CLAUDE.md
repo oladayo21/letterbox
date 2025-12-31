@@ -78,6 +78,25 @@ Use `/memory-manager` to:
 
 Memory location: `~/omnibank/claude-memory/letterbox.md`
 
+### Learnings Section
+
+**Always maintain a `## Learnings` section** in the memory file for knowledge useful to future sessions:
+
+- Environment quirks (e.g., global gitignore blocking `.sql` files)
+- Workarounds discovered during implementation
+- Non-obvious patterns in the codebase
+- Gotchas with dependencies or tools
+- Anything that took debugging time to figure out
+
+Format:
+```markdown
+## Learnings
+- `git add -f` needed for .sql files (global gitignore)
+- pgx/v5 requires explicit null handling with pointers
+```
+
+**Add learnings as you discover them, not just at session end.**
+
 ---
 
 ## Project Context
