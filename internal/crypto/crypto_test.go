@@ -59,8 +59,8 @@ func TestDecryptTamperedCiphertext(t *testing.T) {
 	tampered := encrypted[:len(encrypted)-2] + "XX"
 	_, err = Decrypt(tampered, key)
 
-	if err == nil {
-		t.Error("Expected error for tampered ciphertext")
+	if err != ErrDecryptionFailed {
+		t.Errorf("Expected ErrDecryptionFailed, got %v", err)
 	}
 }
 
@@ -89,5 +89,45 @@ func TestEncryptProducesDifferentOutput(t *testing.T) {
 
 	if encrypted1 == encrypted2 {
 		t.Error("Same plaintext should produce different ciphertext (random nonce)")
+	}
+}
+
+func TestEncryptDecryptEmptyString(t *testing.T) {
+	key, _ := hex.DecodeString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	encrypted, err := Encrypt("", key)
+
+	if err != nil {
+		t.Fatalf("Encrypt empty string failed: %v", err)
+	}
+
+	decrypted, err := Decrypt(encrypted, key)
+
+	if err != nil {
+		t.Fatalf("Decrypt failed: %v", err)
+	}
+
+	if decrypted != "" {
+		t.Errorf("Expected empty string, got %q", decrypted)
+	}
+}
+
+func TestDecryptInvalidBase64(t *testing.T) {
+	key, _ := hex.DecodeString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	_, err := Decrypt("not-valid-base64!!!", key)
+
+	if err == nil {
+		t.Error("Expected error for invalid base64")
+	}
+}
+
+func TestDecryptCiphertextTooShort(t *testing.T) {
+	key, _ := hex.DecodeString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+
+	_, err := Decrypt("YWJj", key) // "abc" in base64, too short for nonce
+
+	if err != ErrCiphertextTooShort {
+		t.Errorf("Expected ErrCiphertextTooShort, got %v", err)
 	}
 }
