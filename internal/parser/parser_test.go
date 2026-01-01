@@ -168,10 +168,9 @@ func TestParse_EncodedHeaders(t *testing.T) {
 func TestParse_InvalidEmail(t *testing.T) {
 	_, err := parser.Parse([]byte("not a valid email"))
 
-	// enmime is lenient, may not error but result will be incomplete
-	// This test documents behavior
-	if err != nil {
-		t.Logf("Parse returned error for invalid input: %v", err)
+	// enmime returns error for completely invalid input
+	if err == nil {
+		t.Error("expected error for invalid email input")
 	}
 }
 
@@ -227,5 +226,81 @@ Body text.
 
 	if !found {
 		t.Error("Expected Bob <bob@example.com> in To list")
+	}
+}
+
+func TestParse_EmptySlicesNotNil(t *testing.T) {
+	// Email with no To, CC, or attachments should have empty slices, not nil
+	raw := []byte(`Message-ID: <empty@example.com>
+Date: Mon, 20 Jan 2025 12:00:00 +0000
+From: sender@example.com
+Subject: No Recipients
+
+Body.
+`)
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Verify slices are empty, not nil (important for JSON serialization)
+	if email.To == nil {
+		t.Error("To should be empty slice, not nil")
+	}
+
+	if email.CC == nil {
+		t.Error("CC should be empty slice, not nil")
+	}
+
+	if email.Attachments == nil {
+		t.Error("Attachments should be empty slice, not nil")
+	}
+
+	if email.Errors == nil {
+		t.Error("Errors should be empty slice, not nil")
+	}
+
+	// Verify they're actually empty
+	if len(email.To) != 0 {
+		t.Errorf("len(To) = %d, want 0", len(email.To))
+	}
+}
+
+func TestParse_MalformedDateCollectsError(t *testing.T) {
+	raw := []byte(`Message-ID: <malformed@example.com>
+Date: not-a-valid-date
+From: sender@example.com
+Subject: Malformed Date
+
+Body.
+`)
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Date should be zero value
+	if !email.Date.IsZero() {
+		t.Errorf("Date should be zero for malformed input, got %v", email.Date)
+	}
+
+	// Error should be collected
+	hasDateError := false
+
+	for _, e := range email.Errors {
+
+		if strings.Contains(e, "date") {
+			hasDateError = true
+
+			break
+		}
+	}
+
+	if !hasDateError {
+		t.Errorf("Expected date parsing error in Errors, got: %v", email.Errors)
 	}
 }
