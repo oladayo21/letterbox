@@ -22,7 +22,6 @@ const (
 	defaultLimit       = 50
 	maxLimit           = 100
 	presignedURLExpiry = 1 * time.Hour
-	maxUID             = int64(4294967295) // uint32 max
 )
 
 type MessageHandler struct {
@@ -267,12 +266,6 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil || uid < 1 {
 		writeError(w, http.StatusBadRequest, "invalid message UID")
-
-		return
-	}
-
-	if uid > maxUID {
-		writeError(w, http.StatusBadRequest, "message UID exceeds maximum value")
 
 		return
 	}

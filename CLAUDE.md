@@ -67,10 +67,12 @@ When review comments are raised:
    - Does it contradict the spec?
    - Is it a real bug or style preference?
    - Does the suggested fix break something else?
+   - **Is it overengineering?** Ask: will this scenario realistically occur? Adding code for theoretical edge cases adds complexity without value.
 
 2. **Respond before acting**
    - If valid: acknowledge and fix
    - If invalid: explain why with evidence (spec reference, test results)
+   - If overengineering: push back - theoretical problems don't need real solutions
    - If unclear: ask for clarification
 
 3. **Never blindly fix** - reviewer comments are suggestions, not commands
