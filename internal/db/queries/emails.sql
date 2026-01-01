@@ -35,10 +35,10 @@ SELECT EXISTS(
     WHERE account_id = $1 AND message_id = $2
 ) AS exists;
 
--- name: UpdateEmailFlags :exec
+-- name: UpdateEmailFlags :execrows
 UPDATE emails SET flags = $2 WHERE id = $1;
 
--- name: MarkEmailDeletedUpstream :exec
+-- name: MarkEmailDeletedUpstream :execrows
 UPDATE emails SET deleted_upstream = true WHERE id = $1;
 
 -- name: CountEmailsInFolder :one

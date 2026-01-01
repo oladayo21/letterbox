@@ -487,7 +487,84 @@ func TestEmailRepository_UniqueConstraint(t *testing.T) {
 	// Try to create duplicate
 	_, err = repo.Create(ctx, input)
 
-	if err == nil {
-		t.Error("expected error for duplicate (account_id, folder, uid)")
+	if err != repository.ErrEmailAlreadyExists {
+		t.Errorf("expected ErrEmailAlreadyExists, got %v", err)
+	}
+}
+
+func TestEmailRepository_UpdateFlags_NotFound(t *testing.T) {
+	repo, _, _ := setupEmailTest(t)
+	ctx := context.Background()
+
+	err := repo.UpdateFlags(ctx, uuid.New(), []string{"\\Seen"})
+
+	if err != repository.ErrEmailNotFound {
+		t.Errorf("expected ErrEmailNotFound, got %v", err)
+	}
+}
+
+func TestEmailRepository_MarkDeletedUpstream_NotFound(t *testing.T) {
+	repo, _, _ := setupEmailTest(t)
+	ctx := context.Background()
+
+	err := repo.MarkDeletedUpstream(ctx, uuid.New())
+
+	if err != repository.ErrEmailNotFound {
+		t.Errorf("expected ErrEmailNotFound, got %v", err)
+	}
+}
+
+func TestEmailRepository_Create_NilSlices(t *testing.T) {
+	repo, _, accountID := setupEmailTest(t)
+	ctx := context.Background()
+
+	// Create with nil To and CC slices
+	input := domain.CreateEmailInput{
+		AccountID:  accountID,
+		UID:        999,
+		Folder:     "INBOX",
+		Subject:    "Nil Slice Test",
+		Date:       time.Now(),
+		ParsedText: "test",
+		To:         nil,
+		CC:         nil,
+	}
+
+	created, err := repo.Create(ctx, input)
+
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Verify slices are empty, not nil
+	if created.To == nil {
+		t.Error("To should be empty slice, not nil")
+	}
+
+	if len(created.To) != 0 {
+		t.Errorf("To length = %d, want 0", len(created.To))
+	}
+
+	if created.CC == nil {
+		t.Error("CC should be empty slice, not nil")
+	}
+
+	if len(created.CC) != 0 {
+		t.Errorf("CC length = %d, want 0", len(created.CC))
+	}
+
+	// Fetch and verify again
+	fetched, err := repo.Get(ctx, created.ID)
+
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+
+	if fetched.To == nil {
+		t.Error("fetched To should be empty slice, not nil")
+	}
+
+	if fetched.CC == nil {
+		t.Error("fetched CC should be empty slice, not nil")
 	}
 }

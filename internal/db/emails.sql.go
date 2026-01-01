@@ -267,16 +267,19 @@ func (q *Queries) ListEmails(ctx context.Context, arg ListEmailsParams) ([]Email
 	return items, nil
 }
 
-const markEmailDeletedUpstream = `-- name: MarkEmailDeletedUpstream :exec
+const markEmailDeletedUpstream = `-- name: MarkEmailDeletedUpstream :execrows
 UPDATE emails SET deleted_upstream = true WHERE id = $1
 `
 
-func (q *Queries) MarkEmailDeletedUpstream(ctx context.Context, id pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, markEmailDeletedUpstream, id)
-	return err
+func (q *Queries) MarkEmailDeletedUpstream(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markEmailDeletedUpstream, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-const updateEmailFlags = `-- name: UpdateEmailFlags :exec
+const updateEmailFlags = `-- name: UpdateEmailFlags :execrows
 UPDATE emails SET flags = $2 WHERE id = $1
 `
 
@@ -285,7 +288,10 @@ type UpdateEmailFlagsParams struct {
 	Flags []string    `json:"flags"`
 }
 
-func (q *Queries) UpdateEmailFlags(ctx context.Context, arg UpdateEmailFlagsParams) error {
-	_, err := q.db.Exec(ctx, updateEmailFlags, arg.ID, arg.Flags)
-	return err
+func (q *Queries) UpdateEmailFlags(ctx context.Context, arg UpdateEmailFlagsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateEmailFlags, arg.ID, arg.Flags)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

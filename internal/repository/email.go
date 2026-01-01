@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/oladayo21/letterbox/internal/db"
@@ -16,7 +17,8 @@ import (
 )
 
 var (
-	ErrEmailNotFound = errors.New("email not found")
+	ErrEmailNotFound      = errors.New("email not found")
+	ErrEmailAlreadyExists = errors.New("email already exists")
 )
 
 type EmailRepository struct {
@@ -29,13 +31,26 @@ func NewEmailRepository(queries *db.Queries) *EmailRepository {
 }
 
 func (r *EmailRepository) Create(ctx context.Context, input domain.CreateEmailInput) (*domain.Email, error) {
-	toJSON, err := json.Marshal(input.To)
+	// Ensure slices are not nil to avoid null in JSONB
+	to := input.To
+
+	if to == nil {
+		to = []domain.EmailAddress{}
+	}
+
+	cc := input.CC
+
+	if cc == nil {
+		cc = []domain.EmailAddress{}
+	}
+
+	toJSON, err := json.Marshal(to)
 
 	if err != nil {
 		return nil, fmt.Errorf("marshaling to recipients: %w", err)
 	}
 
-	ccJSON, err := json.Marshal(input.CC)
+	ccJSON, err := json.Marshal(cc)
 
 	if err != nil {
 		return nil, fmt.Errorf("marshaling cc recipients: %w", err)
@@ -61,6 +76,12 @@ func (r *EmailRepository) Create(ctx context.Context, input domain.CreateEmailIn
 	dbEmail, err := r.queries.InsertEmail(ctx, params)
 
 	if err != nil {
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, ErrEmailAlreadyExists
+		}
+
 		return nil, fmt.Errorf("inserting email: %w", err)
 	}
 
@@ -175,17 +196,28 @@ func (r *EmailRepository) UpdateFlags(ctx context.Context, id uuid.UUID, flags [
 		Flags: flags,
 	}
 
-	if err := r.queries.UpdateEmailFlags(ctx, params); err != nil {
+	rowsAffected, err := r.queries.UpdateEmailFlags(ctx, params)
+
+	if err != nil {
 		return fmt.Errorf("updating email flags: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrEmailNotFound
 	}
 
 	return nil
 }
 
 func (r *EmailRepository) MarkDeletedUpstream(ctx context.Context, id uuid.UUID) error {
+	rowsAffected, err := r.queries.MarkEmailDeletedUpstream(ctx, uuidToPgtype(id))
 
-	if err := r.queries.MarkEmailDeletedUpstream(ctx, uuidToPgtype(id)); err != nil {
+	if err != nil {
 		return fmt.Errorf("marking email deleted upstream: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return ErrEmailNotFound
 	}
 
 	return nil
@@ -207,7 +239,7 @@ func (r *EmailRepository) CountInFolder(ctx context.Context, accountID uuid.UUID
 }
 
 func (r *EmailRepository) toEmail(dbEmail db.Email) (*domain.Email, error) {
-	var to []domain.EmailAddress
+	to := []domain.EmailAddress{}
 
 	if len(dbEmail.ToRecipients) > 0 {
 
@@ -216,7 +248,7 @@ func (r *EmailRepository) toEmail(dbEmail db.Email) (*domain.Email, error) {
 		}
 	}
 
-	var cc []domain.EmailAddress
+	cc := []domain.EmailAddress{}
 
 	if len(dbEmail.CcRecipients) > 0 {
 
@@ -229,6 +261,12 @@ func (r *EmailRepository) toEmail(dbEmail db.Email) (*domain.Email, error) {
 
 	if dbEmail.DeletedUpstream != nil {
 		deletedUpstream = *dbEmail.DeletedUpstream
+	}
+
+	flags := dbEmail.Flags
+
+	if flags == nil {
+		flags = []string{}
 	}
 
 	return &domain.Email{
@@ -246,7 +284,7 @@ func (r *EmailRepository) toEmail(dbEmail db.Email) (*domain.Email, error) {
 		ParsedText:      derefString(dbEmail.ParsedText),
 		ParsedHTML:      derefString(dbEmail.ParsedHtml),
 		Raw:             derefString(dbEmail.Raw),
-		Flags:           dbEmail.Flags,
+		Flags:           flags,
 		DeletedUpstream: deletedUpstream,
 		CreatedAt:       dbEmail.CreatedAt.Time,
 	}, nil
