@@ -7,7 +7,11 @@ import (
 	"github.com/oladayo21/letterbox/internal/repository"
 )
 
-func NewRouter(apiKey string, accountRepo *repository.AccountRepository) *chi.Mux {
+func NewRouter(
+	apiKey string,
+	accountRepo *repository.AccountRepository,
+	emailRepo *repository.EmailRepository,
+) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(middleware.Logger)
@@ -16,6 +20,7 @@ func NewRouter(apiKey string, accountRepo *repository.AccountRepository) *chi.Mu
 
 	accountHandler := NewAccountHandler(accountRepo)
 	folderHandler := NewFolderHandler(accountRepo)
+	messageHandler := NewMessageHandler(accountRepo, emailRepo)
 
 	r.Route("/accounts", func(r chi.Router) {
 		r.Post("/", accountHandler.Create)
@@ -23,6 +28,7 @@ func NewRouter(apiKey string, accountRepo *repository.AccountRepository) *chi.Mu
 		r.Get("/{id}", accountHandler.Get)
 		r.Delete("/{id}", accountHandler.Delete)
 		r.Get("/{id}/folders", folderHandler.List)
+		r.Get("/{id}/folders/{name}/messages", messageHandler.ListMessages)
 	})
 
 	return r
