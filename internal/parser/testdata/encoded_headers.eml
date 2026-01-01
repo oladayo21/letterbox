@@ -1,0 +1,11 @@
+Message-ID: <test004@example.com>
+Date: Thu, 18 Jan 2025 11:45:00 +0000
+From: =?UTF-8?B?SsO2aG4gRMO2ZQ==?= <john@example.com>
+To: =?UTF-8?Q?M=C3=BCller?= <mueller@example.com>
+Subject: =?UTF-8?B?VGVzdCB3aXRoIMOcbWxhdXRz?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+This email has RFC 2047 encoded headers.
+The From name is "Jöhn Döe" and To name is "Müller".
+The subject is "Test with Ümlauts".

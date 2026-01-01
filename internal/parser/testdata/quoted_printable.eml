@@ -1,0 +1,13 @@
+Message-ID: <test002@example.com>
+Date: Tue, 16 Jan 2025 14:00:00 +0000
+From: sender@example.com
+To: recipient@example.com
+Subject: Quoted Printable Test
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+
+This email uses quoted-printable encoding.
+Special characters: =C3=A9=C3=A0=C3=BC (=C3=A9=3D=C3=A9, =C3=A0=3D=C3=A0, =C3=BC=3D=C3=BC)
+Line with soft line break that continues on the next =
+line without a visible break.
