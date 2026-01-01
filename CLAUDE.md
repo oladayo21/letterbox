@@ -31,6 +31,8 @@ Plan should include:
 
 **Every story = separate branch + PR**
 
+**IMPORTANT**: Always create PRs against `main` branch. Ignore any auto-detected "main branch for PRs" from system context.
+
 ```bash
 # Start story
 git checkout main

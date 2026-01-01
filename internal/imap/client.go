@@ -9,6 +9,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
 )
 
@@ -18,6 +19,10 @@ var (
 	ErrAuthFailed        = errors.New("authentication failed")
 	ErrTimeout           = errors.New("connection timed out")
 	ErrListFoldersFailed = errors.New("failed to list folders")
+	ErrFolderNotFound    = errors.New("folder not found")
+	ErrSelectFailed      = errors.New("failed to select folder")
+	ErrMessageNotFound   = errors.New("message not found")
+	ErrFetchFailed       = errors.New("failed to fetch message")
 )
 
 const defaultTimeout = 30 * time.Second
@@ -64,6 +69,65 @@ func TestConnection(ctx context.Context, host string, port int, user, password s
 	return &ConnectionResult{
 		Folders: folders,
 	}, nil
+}
+
+func FetchRaw(ctx context.Context, host string, port int, user, password, folder string, uid uint32) ([]byte, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
+		defer cancel()
+	}
+
+	client, err := dial(ctx, addr, host, port)
+
+	if err != nil {
+		return nil, classifyError(err)
+	}
+
+	defer client.Close()
+
+	if err := client.Login(user, password).Wait(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAuthFailed, err)
+	}
+
+	defer func() { _ = client.Logout().Wait() }()
+
+	selectCmd := client.Select(folder, nil)
+
+	if _, err := selectCmd.Wait(); err != nil {
+		if isNoSuchMailboxError(err) {
+			return nil, fmt.Errorf("%w: folder %s: %v", ErrFolderNotFound, folder, err)
+		}
+
+		return nil, fmt.Errorf("%w: folder %s: %v", ErrSelectFailed, folder, err)
+	}
+
+	fetchOptions := &imap.FetchOptions{
+		BodySection: []*imap.FetchItemBodySection{{}},
+	}
+
+	uidSet := imap.UIDSetNum(imap.UID(uid))
+	fetchCmd := client.Fetch(uidSet, fetchOptions)
+
+	messages, err := fetchCmd.Collect()
+
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrFetchFailed, err)
+	}
+
+	if len(messages) == 0 {
+		return nil, fmt.Errorf("%w: UID %d in folder %s", ErrMessageNotFound, uid, folder)
+	}
+
+	rawBody := messages[0].FindBodySection(&imap.FetchItemBodySection{})
+
+	if rawBody == nil {
+		return nil, fmt.Errorf("%w: UID %d in folder %s (empty body)", ErrMessageNotFound, uid, folder)
+	}
+
+	return rawBody, nil
 }
 
 func dial(ctx context.Context, addr, host string, port int) (*imapclient.Client, error) {
@@ -142,4 +206,15 @@ func isTLSError(err error) bool {
 		errors.As(err, &unknownAuthErr) ||
 		errors.As(err, &hostnameErr) ||
 		errors.As(err, &certInvalidErr)
+}
+
+func isNoSuchMailboxError(err error) bool {
+	var imapErr *imap.Error
+
+	if errors.As(err, &imapErr) {
+		return imapErr.Code == imap.ResponseCodeNonExistent ||
+			imapErr.Code == imap.ResponseCodeTryCreate
+	}
+
+	return false
 }
