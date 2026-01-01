@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"github.com/oladayo21/letterbox/internal/imap"
 	"github.com/oladayo21/letterbox/internal/repository"
 )
+
+const maxBodySize = 1 << 20 // 1MB
 
 var validate = validator.New(validator.WithRequiredStructEnabled())
 
@@ -68,6 +71,8 @@ func toAccountResponse(a *domain.Account) accountResponse {
 }
 
 func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+
 	var req createAccountRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -88,6 +93,7 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	_, err := imap.TestConnection(ctx, req.ImapHost, req.ImapPort, req.ImapUser, req.ImapPassword)
 
 	if err != nil {
+		log.Printf("WARN: IMAP validation failed for host=%s user=%s: %v", req.ImapHost, req.ImapUser, err)
 		writeError(w, http.StatusBadRequest, "IMAP validation failed: "+classifyImapError(err))
 
 		return
@@ -105,9 +111,10 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		SmtpPassword: req.SmtpPassword,
 	}
 
-	account, err := h.repo.Create(r.Context(), input)
+	account, err := h.repo.Create(ctx, input)
 
 	if err != nil {
+		log.Printf("ERROR: failed to create account: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to create account")
 
 		return
@@ -120,6 +127,7 @@ func (h *AccountHandler) List(w http.ResponseWriter, r *http.Request) {
 	accounts, err := h.repo.List(r.Context())
 
 	if err != nil {
+		log.Printf("ERROR: failed to list accounts: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to list accounts")
 
 		return
@@ -153,6 +161,7 @@ func (h *AccountHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		log.Printf("ERROR: failed to get account %s: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "failed to get account")
 
 		return
@@ -180,6 +189,7 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
+		log.Printf("ERROR: failed to delete account %s: %v", id, err)
 		writeError(w, http.StatusInternalServerError, "failed to delete account")
 
 		return

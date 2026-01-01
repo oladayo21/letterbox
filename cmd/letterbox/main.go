@@ -35,6 +35,10 @@ func main() {
 
 	queries := db.New(pool)
 
+	if cfg.APIKey == "" {
+		log.Fatal("LETTERBOX_API_KEY must not be empty")
+	}
+
 	accountRepo, err := repository.NewAccountRepository(queries, cfg.EncryptionKeyBytes())
 
 	if err != nil {
