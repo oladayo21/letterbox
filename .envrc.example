@@ -14,9 +14,10 @@ export S3_ACCESS_KEY=minioadmin
 export S3_SECRET_KEY=minioadmin
 export S3_REGION=us-east-1
 
-# Encryption key for IMAP/SMTP credentials (32 bytes, base64 encoded)
-# Generate: openssl rand -base64 32
+# Encryption key for IMAP/SMTP credentials (32 bytes hex = 64 chars)
+# Generate: openssl rand -hex 32
 export LETTERBOX_ENCRYPTION_KEY=
 
 # API Authentication
-export API_KEY=
+# Generate: openssl rand -hex 16
+export LETTERBOX_API_KEY=
