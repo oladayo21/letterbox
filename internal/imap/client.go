@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -29,6 +30,12 @@ const defaultTimeout = 30 * time.Second
 
 type ConnectionResult struct {
 	Folders []string
+}
+
+// Folder represents an IMAP mailbox with metadata.
+type Folder struct {
+	Name         string `json:"name"`
+	MessageCount uint32 `json:"message_count"`
 }
 
 func TestConnection(ctx context.Context, host string, port int, user, password string) (*ConnectionResult, error) {
@@ -128,6 +135,68 @@ func FetchRaw(ctx context.Context, host string, port int, user, password, folder
 	}
 
 	return rawBody, nil
+}
+
+// ListFolders returns all folders with message counts.
+func ListFolders(ctx context.Context, host string, port int, user, password string) ([]Folder, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
+		defer cancel()
+	}
+
+	client, err := dial(ctx, addr, host, port)
+
+	if err != nil {
+		return nil, classifyError(err)
+	}
+
+	defer client.Close()
+
+	if err := client.Login(user, password).Wait(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAuthFailed, err)
+	}
+
+	defer func() { _ = client.Logout().Wait() }()
+
+	mailboxes, err := client.List("", "*", nil).Collect()
+
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrListFoldersFailed, err)
+	}
+
+	folders := make([]Folder, 0, len(mailboxes))
+
+	for _, mbox := range mailboxes {
+		// Get message count via STATUS command
+		statusOpts := &imap.StatusOptions{NumMessages: true}
+		statusData, err := client.Status(mbox.Mailbox, statusOpts).Wait()
+
+		if err != nil {
+			slog.Debug("STATUS failed for folder", "folder", mbox.Mailbox, "error", err)
+			folders = append(folders, Folder{
+				Name:         mbox.Mailbox,
+				MessageCount: 0,
+			})
+
+			continue
+		}
+
+		var count uint32
+
+		if statusData.NumMessages != nil {
+			count = *statusData.NumMessages
+		}
+
+		folders = append(folders, Folder{
+			Name:         mbox.Mailbox,
+			MessageCount: count,
+		})
+	}
+
+	return folders, nil
 }
 
 func dial(ctx context.Context, addr, host string, port int) (*imapclient.Client, error) {

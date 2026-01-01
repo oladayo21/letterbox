@@ -264,5 +264,9 @@ func classifyImapError(err error) string {
 		return "connection failed"
 	}
 
+	if errors.Is(err, imap.ErrListFoldersFailed) {
+		return "failed to list folders"
+	}
+
 	return "unknown error"
 }

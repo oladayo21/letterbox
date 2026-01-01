@@ -15,12 +15,14 @@ func NewRouter(apiKey string, accountRepo *repository.AccountRepository) *chi.Mu
 	r.Use(APIKeyAuth(apiKey))
 
 	accountHandler := NewAccountHandler(accountRepo)
+	folderHandler := NewFolderHandler(accountRepo)
 
 	r.Route("/accounts", func(r chi.Router) {
 		r.Post("/", accountHandler.Create)
 		r.Get("/", accountHandler.List)
 		r.Get("/{id}", accountHandler.Get)
 		r.Delete("/{id}", accountHandler.Delete)
+		r.Get("/{id}/folders", folderHandler.List)
 	})
 
 	return r
