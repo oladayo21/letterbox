@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/oladayo21/letterbox/internal/domain"
+	"github.com/oladayo21/letterbox/internal/imap"
 	"github.com/oladayo21/letterbox/internal/ingest"
 	"github.com/oladayo21/letterbox/internal/repository"
 	"github.com/oladayo21/letterbox/internal/storage"
@@ -21,6 +22,7 @@ const (
 	defaultLimit       = 50
 	maxLimit           = 100
 	presignedURLExpiry = 1 * time.Hour
+	maxUID             = int64(4294967295) // uint32 max
 )
 
 type MessageHandler struct {
@@ -226,7 +228,7 @@ type attachmentResponse struct {
 	Filename    string    `json:"filename"`
 	ContentType string    `json:"content_type"`
 	Size        int64     `json:"size"`
-	URL         string    `json:"url"`
+	URL         string    `json:"url,omitempty"`
 }
 
 type messageResponse struct {
@@ -265,6 +267,12 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil || uid < 1 {
 		writeError(w, http.StatusBadRequest, "invalid message UID")
+
+		return
+	}
+
+	if uid > maxUID {
+		writeError(w, http.StatusBadRequest, "message UID exceeds maximum value")
 
 		return
 	}
@@ -316,7 +324,21 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err != nil {
+		// Race condition: another request ingested this email
+		if errors.Is(err, ingest.ErrEmailAlreadyExists) {
+			email, err = h.emailRepo.GetByUID(r.Context(), accountID, folderName, uid)
+
+			if err != nil {
+				slog.Error("failed to get email after race", "account_id", accountID, "uid", uid, "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to get message")
+
+				return
+			}
+		} else if errors.Is(err, imap.ErrMessageNotFound) || errors.Is(err, imap.ErrFolderNotFound) {
+			writeError(w, http.StatusNotFound, "message not found")
+
+			return
+		} else if err != nil {
 			slog.Error("failed to fetch email", "account_id", accountID, "uid", uid, "error", err)
 			writeError(w, http.StatusBadGateway, "failed to fetch message from IMAP")
 
