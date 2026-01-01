@@ -1,0 +1,30 @@
+Message-ID: <nested001@example.com>
+Date: Wed, 15 Jan 2025 12:00:00 +0000
+From: sender@example.com
+To: recipient@example.com
+Subject: Nested Multipart Email
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer_boundary"
+
+--outer_boundary
+Content-Type: multipart/alternative; boundary="inner_boundary"
+
+--inner_boundary
+Content-Type: text/plain; charset="utf-8"
+
+Plain text body of nested email.
+
+--inner_boundary
+Content-Type: text/html; charset="utf-8"
+
+<html><body><p>HTML body of nested email.</p></body></html>
+
+--inner_boundary--
+
+--outer_boundary
+Content-Type: text/plain; name="notes.txt"
+Content-Disposition: attachment; filename="notes.txt"
+
+These are some notes in a text file attachment.
+
+--outer_boundary--

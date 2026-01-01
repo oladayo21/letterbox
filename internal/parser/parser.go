@@ -14,12 +14,14 @@ type EmailAddress struct {
 	Email string
 }
 
-// Attachment represents a parsed email attachment.
+// Attachment represents a parsed email attachment or inline image.
 type Attachment struct {
 	Filename    string
 	ContentType string
 	Size        int
 	Data        []byte
+	IsInline    bool
+	ContentID   string // For inline images, references via cid: URLs in HTML
 }
 
 // ParsedEmail contains the result of parsing a raw email message.
@@ -102,13 +104,27 @@ func envToEmail(env *enmime.Envelope) *ParsedEmail {
 		result.Errors = append(result.Errors, fmt.Sprintf("cc address parsing failed: %v", err))
 	}
 
-	// Extract attachments (for Story 2.2b, but structure is ready)
+	// Extract regular attachments
 	for _, att := range env.Attachments {
 		result.Attachments = append(result.Attachments, Attachment{
 			Filename:    att.FileName,
 			ContentType: att.ContentType,
 			Size:        len(att.Content),
 			Data:        att.Content,
+			IsInline:    false,
+			ContentID:   att.ContentID,
+		})
+	}
+
+	// Extract inline images (embedded via cid: URLs in HTML)
+	for _, inl := range env.Inlines {
+		result.Attachments = append(result.Attachments, Attachment{
+			Filename:    inl.FileName,
+			ContentType: inl.ContentType,
+			Size:        len(inl.Content),
+			Data:        inl.Content,
+			IsInline:    true,
+			ContentID:   inl.ContentID,
 		})
 	}
 

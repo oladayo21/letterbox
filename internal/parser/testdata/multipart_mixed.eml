@@ -1,0 +1,22 @@
+Message-ID: <mixed001@example.com>
+Date: Wed, 15 Jan 2025 11:00:00 +0000
+From: sender@example.com
+To: recipient@example.com
+Subject: Email with Attachment
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed_boundary"
+
+--mixed_boundary
+Content-Type: text/plain; charset="utf-8"
+
+This email has an attachment.
+
+--mixed_boundary
+Content-Type: application/pdf; name="document.pdf"
+Content-Disposition: attachment; filename="document.pdf"
+Content-Transfer-Encoding: base64
+
+JVBERi0xLjQKMSAwIG9iago8PAovVHlwZSAvQ2F0YWxvZwo+PgplbmRvYmoKdHJhaWxlcgo8
+PAovUm9vdCAxIDAgUgo+PgolJUVPRgo=
+
+--mixed_boundary--

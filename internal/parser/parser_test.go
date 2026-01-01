@@ -304,3 +304,235 @@ Body.
 		t.Errorf("Expected date parsing error in Errors, got: %v", email.Errors)
 	}
 }
+
+// Story 2.2b: Multipart & Attachment Tests
+
+func TestParse_MultipartAlternative(t *testing.T) {
+	raw := readTestEmail(t, "multipart_alternative.eml")
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should have both text and HTML
+	if !strings.Contains(email.Text, "plain text version") {
+		t.Errorf("Text body missing expected content: %q", email.Text)
+	}
+
+	if !strings.Contains(email.HTML, "<strong>HTML</strong>") {
+		t.Errorf("HTML body missing expected content: %q", email.HTML)
+	}
+
+	// No attachments
+	if len(email.Attachments) != 0 {
+		t.Errorf("Expected 0 attachments, got %d", len(email.Attachments))
+	}
+}
+
+func TestParse_MultipartMixed(t *testing.T) {
+	raw := readTestEmail(t, "multipart_mixed.eml")
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should have text body
+	if !strings.Contains(email.Text, "has an attachment") {
+		t.Errorf("Text body missing expected content: %q", email.Text)
+	}
+
+	// Should have one attachment
+	if len(email.Attachments) != 1 {
+		t.Fatalf("Expected 1 attachment, got %d", len(email.Attachments))
+	}
+
+	att := email.Attachments[0]
+
+	if att.Filename != "document.pdf" {
+		t.Errorf("Attachment filename = %q, want %q", att.Filename, "document.pdf")
+	}
+
+	if att.ContentType != "application/pdf" {
+		t.Errorf("Attachment ContentType = %q, want %q", att.ContentType, "application/pdf")
+	}
+
+	if att.IsInline {
+		t.Error("Attachment should not be marked as inline")
+	}
+
+	if att.Size == 0 {
+		t.Error("Attachment size should not be 0")
+	}
+
+	if len(att.Data) == 0 {
+		t.Error("Attachment data should not be empty")
+	}
+}
+
+func TestParse_NestedMultipart(t *testing.T) {
+	raw := readTestEmail(t, "nested_multipart.eml")
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should have both text and HTML from inner multipart/alternative
+	if !strings.Contains(email.Text, "Plain text body of nested") {
+		t.Errorf("Text body missing expected content: %q", email.Text)
+	}
+
+	if !strings.Contains(email.HTML, "HTML body of nested") {
+		t.Errorf("HTML body missing expected content: %q", email.HTML)
+	}
+
+	// Should have one attachment from outer multipart/mixed
+	if len(email.Attachments) != 1 {
+		t.Fatalf("Expected 1 attachment, got %d", len(email.Attachments))
+	}
+
+	if email.Attachments[0].Filename != "notes.txt" {
+		t.Errorf("Attachment filename = %q, want %q", email.Attachments[0].Filename, "notes.txt")
+	}
+}
+
+func TestParse_NonASCIIFilename(t *testing.T) {
+	raw := readTestEmail(t, "non_ascii_filename.eml")
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	if len(email.Attachments) != 1 {
+		t.Fatalf("Expected 1 attachment, got %d", len(email.Attachments))
+	}
+
+	// RFC 2231 encoded filename should be decoded
+	// %E6%96%87%E6%A1%A3.txt = 文档.txt (Chinese for "document")
+	att := email.Attachments[0]
+
+	if att.Filename != "文档.txt" {
+		t.Errorf("Attachment filename = %q, want %q", att.Filename, "文档.txt")
+	}
+}
+
+func TestParse_InlineImage(t *testing.T) {
+	raw := readTestEmail(t, "inline_image.eml")
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should have HTML referencing the inline image
+	if !strings.Contains(email.HTML, "cid:logo123@example.com") {
+		t.Errorf("HTML should contain cid reference: %q", email.HTML)
+	}
+
+	// Should have one inline attachment
+	if len(email.Attachments) != 1 {
+		t.Fatalf("Expected 1 attachment, got %d", len(email.Attachments))
+	}
+
+	att := email.Attachments[0]
+
+	if att.Filename != "logo.png" {
+		t.Errorf("Inline filename = %q, want %q", att.Filename, "logo.png")
+	}
+
+	if !att.IsInline {
+		t.Error("Attachment should be marked as inline")
+	}
+
+	if att.ContentID != "logo123@example.com" {
+		t.Errorf("ContentID = %q, want %q", att.ContentID, "logo123@example.com")
+	}
+
+	if !strings.HasPrefix(att.ContentType, "image/png") {
+		t.Errorf("ContentType = %q, want image/png", att.ContentType)
+	}
+}
+
+func TestParse_MixedWithInlineAndAttachment(t *testing.T) {
+	// Email with both an inline image and a regular attachment
+	raw := []byte(`Message-ID: <both001@example.com>
+Date: Wed, 15 Jan 2025 15:00:00 +0000
+From: sender@example.com
+To: recipient@example.com
+Subject: Both Inline and Attachment
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="outer"
+
+--outer
+Content-Type: multipart/related; boundary="related"
+
+--related
+Content-Type: text/html; charset="utf-8"
+
+<html><body><img src="cid:img1"></body></html>
+
+--related
+Content-Type: image/gif; name="icon.gif"
+Content-Disposition: inline; filename="icon.gif"
+Content-ID: <img1>
+Content-Transfer-Encoding: base64
+
+R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7
+
+--related--
+
+--outer
+Content-Type: text/plain; name="readme.txt"
+Content-Disposition: attachment; filename="readme.txt"
+
+This is a readme file.
+
+--outer--
+`)
+
+	email, err := parser.Parse(raw)
+
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should have 2 attachments total
+	if len(email.Attachments) != 2 {
+		t.Fatalf("Expected 2 attachments, got %d", len(email.Attachments))
+	}
+
+	var inlineCount, attachmentCount int
+
+	for _, att := range email.Attachments {
+
+		if att.IsInline {
+			inlineCount++
+
+			if att.Filename != "icon.gif" {
+				t.Errorf("Inline filename = %q, want icon.gif", att.Filename)
+			}
+		} else {
+			attachmentCount++
+
+			if att.Filename != "readme.txt" {
+				t.Errorf("Attachment filename = %q, want readme.txt", att.Filename)
+			}
+		}
+	}
+
+	if inlineCount != 1 {
+		t.Errorf("Expected 1 inline, got %d", inlineCount)
+	}
+
+	if attachmentCount != 1 {
+		t.Errorf("Expected 1 attachment, got %d", attachmentCount)
+	}
+}

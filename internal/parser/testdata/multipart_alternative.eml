@@ -1,0 +1,19 @@
+Message-ID: <alt001@example.com>
+Date: Wed, 15 Jan 2025 10:30:00 +0000
+From: sender@example.com
+To: recipient@example.com
+Subject: Multipart Alternative Test
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary123"
+
+--boundary123
+Content-Type: text/plain; charset="utf-8"
+
+This is the plain text version of the email.
+
+--boundary123
+Content-Type: text/html; charset="utf-8"
+
+<html><body><p>This is the <strong>HTML</strong> version of the email.</p></body></html>
+
+--boundary123--
