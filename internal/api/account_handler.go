@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -93,7 +93,7 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	_, err := imap.TestConnection(ctx, req.ImapHost, req.ImapPort, req.ImapUser, req.ImapPassword)
 
 	if err != nil {
-		log.Printf("WARN: IMAP validation failed for host=%s user=%s: %v", req.ImapHost, req.ImapUser, err)
+		slog.Warn("IMAP validation failed", "host", req.ImapHost, "user", req.ImapUser, "error", err)
 		writeError(w, http.StatusBadRequest, "IMAP validation failed: "+classifyImapError(err))
 
 		return
@@ -114,7 +114,7 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	account, err := h.repo.Create(ctx, input)
 
 	if err != nil {
-		log.Printf("ERROR: failed to create account: %v", err)
+		slog.Error("failed to create account", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to create account")
 
 		return
@@ -127,7 +127,7 @@ func (h *AccountHandler) List(w http.ResponseWriter, r *http.Request) {
 	accounts, err := h.repo.List(r.Context())
 
 	if err != nil {
-		log.Printf("ERROR: failed to list accounts: %v", err)
+		slog.Error("failed to list accounts", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to list accounts")
 
 		return
@@ -161,7 +161,7 @@ func (h *AccountHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		log.Printf("ERROR: failed to get account %s: %v", id, err)
+		slog.Error("failed to get account", "account_id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get account")
 
 		return
@@ -189,7 +189,7 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		log.Printf("ERROR: failed to delete account %s: %v", id, err)
+		slog.Error("failed to delete account", "account_id", id, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to delete account")
 
 		return

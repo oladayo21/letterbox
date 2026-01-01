@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -14,6 +16,9 @@ import (
 )
 
 func main() {
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	slog.SetDefault(logger)
+
 	cfg, err := config.Load()
 
 	if err != nil {
@@ -47,6 +52,6 @@ func main() {
 
 	router := api.NewRouter(cfg.APIKey, accountRepo)
 
-	log.Printf("letterbox starting on :%s", cfg.Port)
+	slog.Info("letterbox starting", "port", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, router))
 }
