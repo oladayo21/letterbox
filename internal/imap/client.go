@@ -26,11 +26,6 @@ type ConnectionResult struct {
 	Folders []string
 }
 
-type dialResult struct {
-	client *imapclient.Client
-	err    error
-}
-
 func TestConnection(ctx context.Context, host string, port int, user, password string) (*ConnectionResult, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)
 
@@ -40,56 +35,10 @@ func TestConnection(ctx context.Context, host string, port int, user, password s
 		defer cancel()
 	}
 
-	opts := &imapclient.Options{
-		TLSConfig: &tls.Config{
-			ServerName: host,
-		},
-	}
-
-	var client *imapclient.Client
-	var err error
-
-	connCh := make(chan dialResult, 1)
-
-	go func() {
-		var c *imapclient.Client
-		var e error
-
-		if port == 993 {
-			c, e = imapclient.DialTLS(addr, opts)
-		} else {
-			c, e = imapclient.DialStartTLS(addr, opts)
-		}
-
-		select {
-		case connCh <- dialResult{c, e}:
-			// Result delivered
-		default:
-			// Context cancelled, clean up
-			if c != nil {
-				c.Close()
-			}
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		return nil, fmt.Errorf("%w: %v", ErrTimeout, ctx.Err())
-	case result := <-connCh:
-		client = result.client
-		err = result.err
-	}
+	client, err := dial(ctx, addr, host, port)
 
 	if err != nil {
-		if isTimeoutError(err) {
-			return nil, fmt.Errorf("%w: %v", ErrTimeout, err)
-		}
-
-		if isTLSError(err) {
-			return nil, fmt.Errorf("%w: %v", ErrTLSFailed, err)
-		}
-
-		return nil, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
+		return nil, classifyError(err)
 	}
 
 	defer client.Close()
@@ -115,6 +64,64 @@ func TestConnection(ctx context.Context, host string, port int, user, password s
 	return &ConnectionResult{
 		Folders: folders,
 	}, nil
+}
+
+func dial(ctx context.Context, addr, host string, port int) (*imapclient.Client, error) {
+	dialer := &net.Dialer{}
+
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if port == 993 {
+		return dialImplicitTLS(ctx, conn, host)
+	}
+
+	return dialStartTLS(conn, host)
+}
+
+func dialImplicitTLS(ctx context.Context, conn net.Conn, host string) (*imapclient.Client, error) {
+	tlsConfig := &tls.Config{ServerName: host}
+	tlsConn := tls.Client(conn, tlsConfig)
+
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		conn.Close()
+
+		return nil, err
+	}
+
+	return imapclient.New(tlsConn, nil), nil
+}
+
+func dialStartTLS(conn net.Conn, host string) (*imapclient.Client, error) {
+	opts := &imapclient.Options{
+		TLSConfig: &tls.Config{ServerName: host},
+	}
+
+	client, err := imapclient.NewStartTLS(conn, opts)
+
+	if err != nil {
+		conn.Close()
+
+		return nil, err
+	}
+
+	return client, nil
+}
+
+func classifyError(err error) error {
+
+	if isTimeoutError(err) {
+		return fmt.Errorf("%w: %v", ErrTimeout, err)
+	}
+
+	if isTLSError(err) {
+		return fmt.Errorf("%w: %v", ErrTLSFailed, err)
+	}
+
+	return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
 }
 
 func isTimeoutError(err error) bool {
