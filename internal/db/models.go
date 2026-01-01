@@ -48,6 +48,8 @@ type Email struct {
 	DeletedUpstream *bool              `json:"deleted_upstream"`
 	SearchVector    interface{}        `json:"search_vector"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	ToRecipients    []byte             `json:"to_recipients"`
+	CcRecipients    []byte             `json:"cc_recipients"`
 }
 
 type Webhook struct {
