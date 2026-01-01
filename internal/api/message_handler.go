@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,27 +12,40 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/oladayo21/letterbox/internal/domain"
+	"github.com/oladayo21/letterbox/internal/imap"
+	"github.com/oladayo21/letterbox/internal/ingest"
 	"github.com/oladayo21/letterbox/internal/repository"
+	"github.com/oladayo21/letterbox/internal/storage"
 )
 
 const (
-	defaultLimit = 50
-	maxLimit     = 100
+	defaultLimit       = 50
+	maxLimit           = 100
+	presignedURLExpiry = 1 * time.Hour
 )
 
 type MessageHandler struct {
-	accountRepo *repository.AccountRepository
-	emailRepo   *repository.EmailRepository
+	accountRepo    *repository.AccountRepository
+	emailRepo      *repository.EmailRepository
+	attachmentRepo *repository.AttachmentRepository
+	ingester       *ingest.Ingester
+	storage        *storage.S3Storage
 }
 
 func NewMessageHandler(
 	accountRepo *repository.AccountRepository,
 	emailRepo *repository.EmailRepository,
+	attachmentRepo *repository.AttachmentRepository,
+	ingester *ingest.Ingester,
+	s3 *storage.S3Storage,
 ) *MessageHandler {
 
 	return &MessageHandler{
-		accountRepo: accountRepo,
-		emailRepo:   emailRepo,
+		accountRepo:    accountRepo,
+		emailRepo:      emailRepo,
+		attachmentRepo: attachmentRepo,
+		ingester:       ingester,
+		storage:        s3,
 	}
 }
 
@@ -206,4 +220,180 @@ func parseListParams(r *http.Request) (limit, offset int, before, after *time.Ti
 	}
 
 	return limit, offset, before, after, nil
+}
+
+type attachmentResponse struct {
+	ID          uuid.UUID `json:"id"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	Size        int64     `json:"size"`
+	URL         string    `json:"url,omitempty"`
+}
+
+type messageResponse struct {
+	ID          uuid.UUID              `json:"id"`
+	UID         int64                  `json:"uid"`
+	MessageID   string                 `json:"message_id,omitempty"`
+	Folder      string                 `json:"folder"`
+	Subject     string                 `json:"subject"`
+	From        domain.EmailAddress    `json:"from"`
+	To          []domain.EmailAddress  `json:"to"`
+	CC          []domain.EmailAddress  `json:"cc,omitempty"`
+	Date        time.Time              `json:"date"`
+	Parsed      parsedContent          `json:"parsed"`
+	Raw         string                 `json:"raw"`
+	Attachments []attachmentResponse   `json:"attachments"`
+	Flags       []string               `json:"flags"`
+}
+
+type parsedContent struct {
+	Text string `json:"text"`
+	HTML string `json:"html"`
+}
+
+func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
+	accountIDStr := chi.URLParam(r, "id")
+	accountID, err := uuid.Parse(accountIDStr)
+
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid account ID")
+
+		return
+	}
+
+	uidStr := chi.URLParam(r, "uid")
+	uid, err := strconv.ParseInt(uidStr, 10, 64)
+
+	if err != nil || uid < 1 {
+		writeError(w, http.StatusBadRequest, "invalid message UID")
+
+		return
+	}
+
+	folderName := r.URL.Query().Get("folder")
+
+	if folderName == "" {
+		folderName = "INBOX"
+	}
+
+	// Verify account exists
+	_, err = h.accountRepo.Get(r.Context(), accountID)
+
+	if errors.Is(err, repository.ErrAccountNotFound) {
+		writeError(w, http.StatusNotFound, "account not found")
+
+		return
+	}
+
+	if err != nil {
+		slog.Error("failed to get account", "account_id", accountID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get account")
+
+		return
+	}
+
+	// Try to get from local DB first
+	email, err := h.emailRepo.GetByUID(r.Context(), accountID, folderName, uid)
+
+	if err != nil && !errors.Is(err, repository.ErrEmailNotFound) {
+		slog.Error("failed to get email", "account_id", accountID, "uid", uid, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get message")
+
+		return
+	}
+
+	// On-demand fetch if not in local DB
+	if errors.Is(err, repository.ErrEmailNotFound) {
+		slog.Info("fetching email on-demand", "account_id", accountID, "folder", folderName, "uid", uid)
+
+		ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+		defer cancel()
+
+		email, err = h.ingester.IngestEmail(ctx, accountID, folderName, uint32(uid))
+
+		if errors.Is(err, ingest.ErrAccountNotFound) {
+			writeError(w, http.StatusNotFound, "account not found")
+
+			return
+		}
+
+		// Race condition: another request ingested this email
+		if errors.Is(err, ingest.ErrEmailAlreadyExists) {
+			email, err = h.emailRepo.GetByUID(r.Context(), accountID, folderName, uid)
+
+			if err != nil {
+				slog.Error("failed to get email after race", "account_id", accountID, "uid", uid, "error", err)
+				writeError(w, http.StatusInternalServerError, "failed to get message")
+
+				return
+			}
+		} else if errors.Is(err, imap.ErrMessageNotFound) || errors.Is(err, imap.ErrFolderNotFound) {
+			writeError(w, http.StatusNotFound, "message not found")
+
+			return
+		} else if err != nil {
+			slog.Error("failed to fetch email", "account_id", accountID, "uid", uid, "error", err)
+			writeError(w, http.StatusBadGateway, "failed to fetch message from IMAP")
+
+			return
+		}
+	}
+
+	// Load attachments if not already loaded
+	if email.Attachments == nil {
+		attachments, err := h.attachmentRepo.GetByEmailID(r.Context(), email.ID)
+
+		if err != nil {
+			slog.Error("failed to get attachments", "email_id", email.ID, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to get attachments")
+
+			return
+		}
+
+		email.Attachments = attachments
+	}
+
+	// Generate presigned URLs for attachments
+	attachmentResponses := make([]attachmentResponse, len(email.Attachments))
+
+	for i, att := range email.Attachments {
+		url, err := h.storage.GeneratePresignedURL(r.Context(), att.S3Key, presignedURLExpiry)
+
+		if err != nil {
+			slog.Error("failed to generate presigned URL", "s3_key", att.S3Key, "error", err)
+			url = "" // Continue without URL rather than failing
+		}
+
+		attachmentResponses[i] = attachmentResponse{
+			ID:          att.ID,
+			Filename:    att.Filename,
+			ContentType: att.ContentType,
+			Size:        att.Size,
+			URL:         url,
+		}
+	}
+
+	response := messageResponse{
+		ID:        email.ID,
+		UID:       email.UID,
+		MessageID: email.MessageID,
+		Folder:    email.Folder,
+		Subject:   email.Subject,
+		From: domain.EmailAddress{
+			Name:  email.FromName,
+			Email: email.FromEmail,
+		},
+		To: email.To,
+		CC: email.CC,
+		Date: email.Date,
+		Parsed: parsedContent{
+			Text: email.ParsedText,
+			HTML: email.ParsedHTML,
+		},
+		Raw:         email.Raw,
+		Attachments: attachmentResponses,
+		Flags:       email.Flags,
+	}
+
+	writeJSON(w, http.StatusOK, response)
 }
