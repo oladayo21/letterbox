@@ -142,6 +142,11 @@ func (h *MessageHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if total == 0 && len(emails) == 0 {
+		slog.Debug("folder returned zero results",
+			"account_id", id, "folder", folderName)
+	}
+
 	messages := make([]messageListItem, len(emails))
 
 	for i, e := range emails {
