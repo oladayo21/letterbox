@@ -1,0 +1,12 @@
+Message-ID: <test001@example.com>
+Date: Mon, 15 Jan 2025 10:30:00 +0000
+From: John Doe <john@example.com>
+To: Jane Smith <jane@example.com>
+Cc: Bob Wilson <bob@example.com>
+Subject: Hello World
+
+This is a plain text email body.
+It has multiple lines.
+
+Best regards,
+John
