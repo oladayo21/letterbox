@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"time"
 
@@ -174,7 +175,7 @@ func ListFolders(ctx context.Context, host string, port int, user, password stri
 		statusData, err := client.Status(mbox.Mailbox, statusOpts).Wait()
 
 		if err != nil {
-			// Log but continue - some folders may not support STATUS
+			slog.Debug("STATUS failed for folder", "folder", mbox.Mailbox, "error", err)
 			folders = append(folders, Folder{
 				Name:         mbox.Mailbox,
 				MessageCount: 0,
