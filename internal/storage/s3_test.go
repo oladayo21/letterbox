@@ -128,6 +128,45 @@ func TestAttachmentKey(t *testing.T) {
 	}
 }
 
+func TestAttachmentKey_PathTraversal(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{
+			name:     "simple traversal",
+			filename: "../../../etc/passwd",
+			want:     "acc-123/456/passwd",
+		},
+		{
+			name:     "nested traversal",
+			filename: "foo/../../../bar/secret.txt",
+			want:     "acc-123/456/secret.txt",
+		},
+		{
+			name:     "absolute path",
+			filename: "/etc/passwd",
+			want:     "acc-123/456/passwd",
+		},
+		{
+			name:     "normal filename preserved",
+			filename: "report.pdf",
+			want:     "acc-123/456/report.pdf",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			key := storage.AttachmentKey("acc-123", 456, tt.filename)
+
+			if key != tt.want {
+				t.Errorf("AttachmentKey(%q) = %q, want %q", tt.filename, key, tt.want)
+			}
+		})
+	}
+}
+
 func TestS3Storage_Upload(t *testing.T) {
 	s := newTestStorage(t)
 	ctx := context.Background()

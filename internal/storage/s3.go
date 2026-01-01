@@ -3,12 +3,15 @@ package storage
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // S3Storage handles attachment storage in S3-compatible storage.
@@ -63,8 +66,12 @@ func NewS3Storage(cfg S3Config) (*S3Storage, error) {
 
 // AttachmentKey generates the S3 key for an attachment.
 // Format: {account_id}/{email_uid}/{filename}
+// Filename is sanitized to prevent path traversal attacks.
 func AttachmentKey(accountID string, emailUID int64, filename string) string {
-	return fmt.Sprintf("%s/%d/%s", accountID, emailUID, filename)
+	// Sanitize filename to prevent path traversal (e.g., "../../../secret.txt")
+	safeFilename := filepath.Base(filename)
+
+	return fmt.Sprintf("%s/%d/%s", accountID, emailUID, safeFilename)
 }
 
 // Upload uploads data to S3 and returns the object URL.
@@ -130,8 +137,22 @@ func (s *S3Storage) Exists(ctx context.Context, key string) (bool, error) {
 	_, err := s.client.HeadObject(ctx, input)
 
 	if err != nil {
-		// Check if it's a "not found" error
-		return false, nil
+		// Check specifically for NotFound error
+		var notFound *types.NotFound
+
+		if errors.As(err, &notFound) {
+			return false, nil
+		}
+
+		// Also check for NoSuchKey (some S3-compatible services use this)
+		var noSuchKey *types.NoSuchKey
+
+		if errors.As(err, &noSuchKey) {
+			return false, nil
+		}
+
+		// Propagate other errors (network, auth, etc.)
+		return false, fmt.Errorf("checking S3 object existence: %w", err)
 	}
 
 	return true, nil
