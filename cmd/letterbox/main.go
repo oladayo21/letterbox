@@ -50,7 +50,9 @@ func main() {
 		log.Fatalf("repository error: %v", err)
 	}
 
-	router := api.NewRouter(cfg.APIKey, accountRepo)
+	emailRepo := repository.NewEmailRepository(queries)
+
+	router := api.NewRouter(cfg.APIKey, accountRepo, emailRepo)
 
 	slog.Info("letterbox starting", "port", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, router))
