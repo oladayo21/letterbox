@@ -20,6 +20,7 @@ var (
 	ErrTimeout           = errors.New("connection timed out")
 	ErrListFoldersFailed = errors.New("failed to list folders")
 	ErrFolderNotFound    = errors.New("folder not found")
+	ErrSelectFailed      = errors.New("failed to select folder")
 	ErrMessageNotFound   = errors.New("message not found")
 	ErrFetchFailed       = errors.New("failed to fetch message")
 )
@@ -91,14 +92,16 @@ func FetchRaw(ctx context.Context, host string, port int, user, password, folder
 		return nil, fmt.Errorf("%w: %v", ErrAuthFailed, err)
 	}
 
+	defer func() { _ = client.Logout().Wait() }()
+
 	selectCmd := client.Select(folder, nil)
 
 	if _, err := selectCmd.Wait(); err != nil {
 		if isNoSuchMailboxError(err) {
-			return nil, fmt.Errorf("%w: %s", ErrFolderNotFound, folder)
+			return nil, fmt.Errorf("%w: folder %s: %v", ErrFolderNotFound, folder, err)
 		}
 
-		return nil, fmt.Errorf("%w: %v", ErrFetchFailed, err)
+		return nil, fmt.Errorf("%w: folder %s: %v", ErrSelectFailed, folder, err)
 	}
 
 	fetchOptions := &imap.FetchOptions{
@@ -121,10 +124,8 @@ func FetchRaw(ctx context.Context, host string, port int, user, password, folder
 	rawBody := messages[0].FindBodySection(&imap.FetchItemBodySection{})
 
 	if rawBody == nil {
-		return nil, fmt.Errorf("%w: empty body for UID %d", ErrFetchFailed, uid)
+		return nil, fmt.Errorf("%w: UID %d in folder %s (empty body)", ErrMessageNotFound, uid, folder)
 	}
-
-	_ = client.Logout().Wait()
 
 	return rawBody, nil
 }
