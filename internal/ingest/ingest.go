@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -100,8 +101,11 @@ func (i *Ingester) IngestEmail(ctx context.Context, accountID uuid.UUID, folder 
 
 		if err != nil {
 			// Cleanup already uploaded attachments on failure
+			// Use background context - original may be cancelled
 			for _, uploadedKey := range s3Keys {
-				_ = i.storage.Delete(ctx, uploadedKey)
+				if delErr := i.storage.Delete(context.Background(), uploadedKey); delErr != nil {
+					slog.Warn("failed to cleanup S3 object", "key", uploadedKey, "error", delErr)
+				}
 			}
 
 			return nil, fmt.Errorf("uploading attachment %s: %w", att.Filename, err)
@@ -132,8 +136,11 @@ func (i *Ingester) IngestEmail(ctx context.Context, accountID uuid.UUID, folder 
 
 	if err != nil {
 		// Cleanup S3 attachments on DB failure
+		// Use background context - original may be cancelled
 		for _, key := range s3Keys {
-			_ = i.storage.Delete(ctx, key)
+			if delErr := i.storage.Delete(context.Background(), key); delErr != nil {
+				slog.Warn("failed to cleanup S3 object", "key", key, "error", delErr)
+			}
 		}
 
 		if errors.Is(err, repository.ErrEmailAlreadyExists) {
