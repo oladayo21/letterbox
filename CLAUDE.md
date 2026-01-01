@@ -9,6 +9,24 @@
 
 ---
 
+## Planning Before Implementation
+
+**Before writing any code**, always:
+1. Analyze task requirements and constraints
+2. Use `AskUserQuestion` tool to clarify any ambiguities or grey areas
+3. Present a clear plan for user approval
+4. Wait for confirmation before proceeding
+
+Plan should include:
+- Files to create/modify
+- Key implementation decisions
+- External libraries to use and why
+- Potential risks or trade-offs
+
+**Never start coding without clarifying unknowns and getting plan approval.**
+
+---
+
 ## Workflow: Branch → PR → Merge
 
 **Every story = separate branch + PR**
@@ -78,6 +96,25 @@ Use `/memory-manager` to:
 
 Memory location: `~/omnibank/claude-memory/letterbox.md`
 
+### Learnings Section
+
+**Always maintain a `## Learnings` section** in the memory file for knowledge useful to future sessions:
+
+- Environment quirks (e.g., global gitignore blocking `.sql` files)
+- Workarounds discovered during implementation
+- Non-obvious patterns in the codebase
+- Gotchas with dependencies or tools
+- Anything that took debugging time to figure out
+
+Format:
+```markdown
+## Learnings
+- `git add -f` needed for .sql files (global gitignore)
+- pgx/v5 requires explicit null handling with pointers
+```
+
+**Add learnings as you discover them, not just at session end.**
+
 ---
 
 ## Project Context
@@ -101,8 +138,9 @@ Memory location: `~/omnibank/claude-memory/letterbox.md`
 
 ## Rules
 
-1. One story at a time
-2. Branch per story, always PR to merge
-3. Never merge with unresolved PR comments
-4. Update memory after each session
-5. Follow story dependencies (see STORIES.md dependency graph)
+1. **Plan first** - analyze, clarify with AskUserQuestion, present plan, get approval
+2. One story at a time
+3. Branch per story, always PR to merge
+4. Never merge with unresolved PR comments
+5. Update memory after each session
+6. Follow story dependencies (see STORIES.md dependency graph)

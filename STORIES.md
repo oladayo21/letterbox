@@ -314,6 +314,48 @@ Get full email by UID.
 
 ---
 
+## Tech Debt: Test Coverage & Error Handling
+*Address gaps identified in PR reviews*
+
+### Story TD.1: API & IMAP Test Coverage
+**Points**: 2
+
+Add missing test coverage for API handlers and IMAP error classification.
+
+**Tasks**:
+- [ ] Add API handler tests: invalid JSON, validation errors, IMAP failures, invalid UUID, not found
+- [ ] Add IMAP error classifier tests: `classifyError()`, `isTimeoutError()`, `isTLSError()`
+- [ ] Test `classifyImapError()` in API handler
+
+**Acceptance**:
+- AccountHandler has >80% test coverage
+- IMAP error classification logic fully tested
+- No mocked IMAP server required (test error classification only)
+
+**Depends on**: 2.2b
+
+---
+
+### Story TD.2: Error Handling & Type Consolidation
+**Points**: 1
+
+Improve error handling and consolidate duplicate types.
+
+**Tasks**:
+- [ ] Log IMAP logout errors at debug level instead of discarding
+- [ ] Log decryption errors internally before returning generic error
+- [ ] Consolidate `parser.EmailAddress` and `domain.EmailAddress` into single type
+- [ ] Add List date filter tests (Before/After)
+
+**Acceptance**:
+- No silently discarded errors
+- Single EmailAddress type used throughout
+- Date filter queries tested
+
+**Depends on**: TD.1
+
+---
+
 ## Epic 3: Real-time Sync Engine
 *Keep local mirror in sync with IMAP*
 
