@@ -1,0 +1,25 @@
+Message-ID: <inline001@example.com>
+Date: Wed, 15 Jan 2025 14:00:00 +0000
+From: sender@example.com
+To: recipient@example.com
+Subject: Email with Inline Image
+MIME-Version: 1.0
+Content-Type: multipart/related; boundary="related_boundary"
+
+--related_boundary
+Content-Type: text/html; charset="utf-8"
+
+<html><body>
+<p>Here is an inline image:</p>
+<img src="cid:logo123@example.com" alt="Logo">
+</body></html>
+
+--related_boundary
+Content-Type: image/png; name="logo.png"
+Content-Disposition: inline; filename="logo.png"
+Content-ID: <logo123@example.com>
+Content-Transfer-Encoding: base64
+
+iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==
+
+--related_boundary--

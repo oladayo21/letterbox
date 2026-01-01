@@ -1,0 +1,21 @@
+Message-ID: <unicode001@example.com>
+Date: Wed, 15 Jan 2025 13:00:00 +0000
+From: sender@example.com
+To: recipient@example.com
+Subject: Non-ASCII Filename Test
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="unicode_boundary"
+
+--unicode_boundary
+Content-Type: text/plain; charset="utf-8"
+
+This email has an attachment with a non-ASCII filename.
+
+--unicode_boundary
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename*=UTF-8''%E6%96%87%E6%A1%A3.txt
+Content-Transfer-Encoding: base64
+
+SGVsbG8gV29ybGQh
+
+--unicode_boundary--
