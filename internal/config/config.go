@@ -17,6 +17,8 @@ type Config struct {
 	S3AccessKey   string `envconfig:"S3_ACCESS_KEY" required:"true"`
 	S3SecretKey   string `envconfig:"S3_SECRET_KEY" required:"true"`
 	S3Region      string `envconfig:"S3_REGION" default:"auto"`
+	LogLevel      string `envconfig:"LOG_LEVEL" default:"info"`
+	LogFormat     string `envconfig:"LOG_FORMAT" default:"json"`
 
 	encryptionKeyBytes []byte
 }
