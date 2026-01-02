@@ -2,6 +2,18 @@
 
 IMAP-to-REST facade with webhook support. Expose email accounts via REST API with real-time notifications.
 
+## Status
+
+| Epic | Status |
+|------|--------|
+| 0. Project Foundation | Complete |
+| 1. Account Management | Complete |
+| 2. Email Reading | Complete |
+| 3. Real-time Sync | Complete |
+| 4. Webhook Engine | **Next** |
+| 5. Search | Pending |
+| 6. Production Readiness | Pending |
+
 ## Architecture
 
 ```
@@ -48,10 +60,33 @@ IMAP-to-REST facade with webhook support. Expose email accounts via REST API wit
 ## Features
 
 - REST API for reading emails across multiple IMAP accounts
-- Real-time webhooks on new email (IMAP IDLE + polling fallback)
-- Full-text search via PostgreSQL
+- Real-time sync via IMAP IDLE (with polling fallback for non-IDLE servers)
+- Webhooks on new email arrival (coming in Epic 4)
+- Full-text search via PostgreSQL (coming in Epic 5)
 - Attachment storage on S3-compatible backends
 - Encrypted credential storage
+
+## API Endpoints
+
+### Accounts
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/accounts` | Create account (validates IMAP creds) |
+| GET | `/accounts` | List all accounts |
+| GET | `/accounts/{id}` | Get account details |
+| DELETE | `/accounts/{id}` | Delete account |
+
+### Folders & Messages
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/accounts/{id}/folders` | List IMAP folders |
+| GET | `/accounts/{id}/folders/{name}/messages` | List messages in folder |
+| GET | `/accounts/{id}/messages/{uid}` | Get single message |
+
+### Health
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Liveness check |
 
 ## Quick Start
 
