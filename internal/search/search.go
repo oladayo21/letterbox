@@ -37,11 +37,11 @@ type SearchResult struct {
 
 // Search performs a full-text search across emails for the given account.
 // The query uses PostgreSQL's websearch_to_tsquery which supports:
-// - Simple terms: "invoice" finds emails containing "invoice"
-// - Phrases: "\"john smith\"" finds emails with exact phrase
-// - OR: "invoice OR receipt" finds emails with either term
-// - NOT: "-spam" excludes emails containing "spam"
-// - AND (implicit): "invoice payment" finds emails with both terms
+// - Simple terms: invoice finds emails containing "invoice"
+// - Phrases: "john smith" (quoted) finds emails with exact phrase
+// - OR: invoice OR receipt finds emails with either term
+// - NOT: -spam excludes emails containing "spam"
+// - AND (implicit): invoice payment finds emails with both terms
 func (s *Service) Search(ctx context.Context, accountID uuid.UUID, query string, folder string, limit, offset int) (*SearchResult, error) {
 	query = strings.TrimSpace(query)
 

@@ -19,6 +19,7 @@ import (
 var (
 	ErrEmailNotFound      = errors.New("email not found")
 	ErrEmailAlreadyExists = errors.New("email already exists")
+	ErrInvalidSearchQuery = errors.New("invalid search query syntax")
 )
 
 type EmailRepository struct {
@@ -253,6 +254,12 @@ func (r *EmailRepository) Search(ctx context.Context, filter domain.SearchEmails
 	dbEmails, err := r.queries.SearchEmails(ctx, params)
 
 	if err != nil {
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) && pgErr.Code == "42601" {
+			return nil, ErrInvalidSearchQuery
+		}
+
 		return nil, fmt.Errorf("searching emails: %w", err)
 	}
 
@@ -284,6 +291,12 @@ func (r *EmailRepository) CountSearch(ctx context.Context, accountID uuid.UUID, 
 	count, err := r.queries.CountSearchEmails(ctx, params)
 
 	if err != nil {
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) && pgErr.Code == "42601" {
+			return 0, ErrInvalidSearchQuery
+		}
+
 		return 0, fmt.Errorf("counting search results: %w", err)
 	}
 
