@@ -164,3 +164,18 @@ func (s *S3Storage) Bucket() string {
 
 	return s.bucket
 }
+
+// Ping checks if the S3 storage is accessible by verifying bucket access.
+func (s *S3Storage) Ping(ctx context.Context) error {
+	input := &s3.HeadBucketInput{
+		Bucket: aws.String(s.bucket),
+	}
+
+	_, err := s.client.HeadBucket(ctx, input)
+
+	if err != nil {
+		return fmt.Errorf("S3 bucket not accessible: %w", err)
+	}
+
+	return nil
+}
