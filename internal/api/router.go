@@ -6,6 +6,7 @@ import (
 
 	"github.com/oladayo21/letterbox/internal/ingest"
 	"github.com/oladayo21/letterbox/internal/repository"
+	"github.com/oladayo21/letterbox/internal/search"
 	"github.com/oladayo21/letterbox/internal/storage"
 )
 
@@ -17,6 +18,7 @@ func NewRouter(
 	webhookRepo *repository.WebhookRepository,
 	ingester *ingest.Ingester,
 	s3 *storage.S3Storage,
+	searchSvc *search.Service,
 ) *chi.Mux {
 	r := chi.NewRouter()
 
@@ -28,6 +30,7 @@ func NewRouter(
 	folderHandler := NewFolderHandler(accountRepo)
 	messageHandler := NewMessageHandler(accountRepo, emailRepo, attachmentRepo, ingester, s3)
 	webhookHandler := NewWebhookHandler(webhookRepo)
+	searchHandler := NewSearchHandler(accountRepo, searchSvc)
 
 	r.Route("/accounts", func(r chi.Router) {
 		r.Post("/", accountHandler.Create)
@@ -44,6 +47,8 @@ func NewRouter(
 		r.Get("/", webhookHandler.List)
 		r.Delete("/{id}", webhookHandler.Delete)
 	})
+
+	r.Get("/search", searchHandler.Search)
 
 	return r
 }
