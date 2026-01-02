@@ -97,48 +97,17 @@ graph TB
     S3C --> MINIO
 ```
 
-### Sequence: New Email Arrives
+### Data Flow
 
-```mermaid
-sequenceDiagram
-    participant IMAP as IMAP Server
-    participant IDLE as IDLE Pool
-    participant COORD as Coordinator
-    participant ING as Ingester
-    participant DB as PostgreSQL
-    participant S3 as S3 Storage
-    participant PROD as Webhook Producer
-    participant WORK as Webhook Worker
-    participant EP as Webhook Endpoint
+```
+New Email Flow:
 
-    IMAP->>IDLE: EXISTS (new message)
-    IDLE->>COORD: IdleEvent{NewMessage}
-    COORD->>IMAP: Fetch UIDs after last known
-    IMAP-->>COORD: [UID 123]
-    
-    COORD->>ING: IngestEmail(account, folder, uid)
-    ING->>IMAP: Fetch raw RFC822
-    IMAP-->>ING: raw bytes
-    ING->>ING: Parse email
-    ING->>S3: Upload attachments
-    ING->>DB: Store email + attachments
-    ING-->>COORD: *domain.Email
-
-    COORD->>PROD: QueueForEmail(email)
-    PROD->>DB: Insert queue items
-
-    loop Worker polling (every 5s)
-        WORK->>DB: GetPendingItems
-        DB-->>WORK: [item]
-        WORK->>EP: POST with HMAC signature
-        alt Success
-            EP-->>WORK: 200 OK
-            WORK->>DB: Mark delivered
-        else Failure
-            EP-->>WORK: Error
-            WORK->>DB: Schedule retry with backoff
-        end
-    end
+IMAP Server ──► IDLE/Poller ──► Coordinator ──► Ingester ──► PostgreSQL
+                                                   │
+                                                   └──► S3 (attachments)
+                                                   │
+                                                   ▼
+                                            Webhook Producer ──► Queue ──► Worker ──► Your Endpoint
 ```
 
 ### Package Structure
