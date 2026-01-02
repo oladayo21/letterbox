@@ -14,6 +14,7 @@ import (
 	"github.com/oladayo21/letterbox/internal/db"
 	"github.com/oladayo21/letterbox/internal/ingest"
 	"github.com/oladayo21/letterbox/internal/repository"
+	"github.com/oladayo21/letterbox/internal/search"
 	"github.com/oladayo21/letterbox/internal/storage"
 )
 
@@ -78,7 +79,10 @@ func main() {
 	// Initialize ingester
 	ingester := ingest.NewIngester(accountRepo, emailRepo, attachmentRepo, s3Storage)
 
-	router := api.NewRouter(cfg.APIKey, accountRepo, emailRepo, attachmentRepo, webhookRepo, ingester, s3Storage)
+	// Initialize search service
+	searchSvc := search.NewService(emailRepo)
+
+	router := api.NewRouter(cfg.APIKey, accountRepo, emailRepo, attachmentRepo, webhookRepo, ingester, s3Storage, searchSvc)
 
 	slog.Info("letterbox starting", "port", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, router))
