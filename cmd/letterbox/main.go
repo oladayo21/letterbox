@@ -5,7 +5,6 @@ import (
 	"log"
 	"log/slog"
 	"net/http"
-	"os"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -13,20 +12,23 @@ import (
 	"github.com/oladayo21/letterbox/internal/config"
 	"github.com/oladayo21/letterbox/internal/db"
 	"github.com/oladayo21/letterbox/internal/ingest"
+	"github.com/oladayo21/letterbox/internal/logging"
 	"github.com/oladayo21/letterbox/internal/repository"
 	"github.com/oladayo21/letterbox/internal/search"
 	"github.com/oladayo21/letterbox/internal/storage"
 )
 
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
-
 	cfg, err := config.Load()
 
 	if err != nil {
 		log.Fatalf("config error: %v", err)
 	}
+
+	logging.Setup(logging.Config{
+		Level:  cfg.LogLevel,
+		Format: cfg.LogFormat,
+	})
 
 	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)

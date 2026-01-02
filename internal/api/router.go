@@ -5,6 +5,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/oladayo21/letterbox/internal/ingest"
+	"github.com/oladayo21/letterbox/internal/logging"
 	"github.com/oladayo21/letterbox/internal/repository"
 	"github.com/oladayo21/letterbox/internal/search"
 	"github.com/oladayo21/letterbox/internal/storage"
@@ -22,7 +23,7 @@ func NewRouter(
 ) *chi.Mux {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Logger)
+	r.Use(logging.RequestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(APIKeyAuth(apiKey))
 
