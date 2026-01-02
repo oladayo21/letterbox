@@ -31,6 +31,9 @@ const (
 	// DefaultHTTPTimeout is the default timeout for webhook HTTP requests.
 	DefaultHTTPTimeout = 30 * time.Second
 
+	// DefaultMaxRetries is the default maximum number of delivery attempts.
+	DefaultMaxRetries = 5
+
 	// SignatureHeader is the header name for the webhook signature.
 	SignatureHeader = "X-Letterbox-Signature"
 
@@ -43,6 +46,7 @@ type WorkerConfig struct {
 	PollInterval time.Duration
 	BatchSize    int32
 	HTTPTimeout  time.Duration
+	MaxRetries   int32
 }
 
 // Worker polls the webhook queue and delivers payloads.
@@ -77,6 +81,10 @@ func NewWorker(
 
 	if config.HTTPTimeout == 0 {
 		config.HTTPTimeout = DefaultHTTPTimeout
+	}
+
+	if config.MaxRetries == 0 {
+		config.MaxRetries = DefaultMaxRetries
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -190,6 +198,12 @@ func (w *Worker) deliverWebhook(item db.WebhookQueue) {
 	itemID := pgtypeToUUID(item.ID)
 	webhookID := pgtypeToUUID(item.WebhookID)
 
+	attempts := int32(0)
+
+	if item.Attempts != nil {
+		attempts = *item.Attempts
+	}
+
 	// Get webhook details (URL and secret)
 	webhook, err := w.webhookRepo.Get(w.ctx, webhookID)
 
@@ -199,13 +213,25 @@ func (w *Worker) deliverWebhook(item db.WebhookQueue) {
 			return
 		}
 
+		// Webhook not found is permanent failure
+		if errors.Is(err, repository.ErrWebhookNotFound) {
+			slog.Error("webhook not found, marking as failed",
+				"queue_id", itemID,
+				"webhook_id", webhookID,
+			)
+
+			w.markFailed(item.ID)
+
+			return
+		}
+
 		slog.Error("failed to get webhook for delivery",
 			"queue_id", itemID,
 			"webhook_id", webhookID,
 			"error", err,
 		)
 
-		w.markFailed(item.ID)
+		w.scheduleRetry(item.ID, attempts)
 
 		return
 	}
@@ -219,14 +245,15 @@ func (w *Worker) deliverWebhook(item db.WebhookQueue) {
 			return
 		}
 
-		slog.Error("webhook delivery failed",
+		slog.Warn("webhook delivery failed",
 			"queue_id", itemID,
 			"webhook_id", webhookID,
 			"url", webhook.URL,
+			"attempt", attempts+1,
 			"error", err,
 		)
 
-		w.markFailed(item.ID)
+		w.scheduleRetry(item.ID, attempts)
 
 		return
 	}
@@ -246,6 +273,7 @@ func (w *Worker) deliverWebhook(item db.WebhookQueue) {
 		"queue_id", itemID,
 		"webhook_id", webhookID,
 		"url", webhook.URL,
+		"attempts", attempts+1,
 	)
 }
 
@@ -312,7 +340,7 @@ func (w *Worker) markDelivered(id pgtype.UUID) bool {
 	return true
 }
 
-// markFailed marks a queue item as failed.
+// markFailed marks a queue item as permanently failed.
 // Returns true if the update succeeded.
 func (w *Worker) markFailed(id pgtype.UUID) bool {
 	_, err := w.queries.MarkWebhookQueueFailed(w.ctx, id)
@@ -327,6 +355,82 @@ func (w *Worker) markFailed(id pgtype.UUID) bool {
 	}
 
 	return true
+}
+
+// backoffSchedule defines the retry intervals per STORIES.md spec.
+// After each failed attempt, wait this duration before retrying.
+var backoffSchedule = []time.Duration{
+	1 * time.Minute,  // After 1st failure
+	5 * time.Minute,  // After 2nd failure
+	15 * time.Minute, // After 3rd failure
+	1 * time.Hour,    // After 4th failure
+	4 * time.Hour,    // After 5th failure (last retry)
+}
+
+// scheduleRetry schedules a retry with backoff, or marks as failed if max retries exceeded.
+func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
+	newAttempts := currentAttempts + 1
+
+	// Check if max retries exceeded
+	if newAttempts >= w.config.MaxRetries {
+		slog.Error("max retries exceeded, marking as failed",
+			"queue_id", pgtypeToUUID(id),
+			"attempts", newAttempts,
+			"max_retries", w.config.MaxRetries,
+		)
+
+		if !w.markFailed(id) {
+			slog.Error("CRITICAL: failed to mark as failed after max retries",
+				"queue_id", pgtypeToUUID(id),
+			)
+		}
+
+		return
+	}
+
+	// Get backoff duration from schedule
+	backoffIndex := int(currentAttempts)
+
+	if backoffIndex >= len(backoffSchedule) {
+		backoffIndex = len(backoffSchedule) - 1
+	}
+
+	backoff := backoffSchedule[backoffIndex]
+	nextAttempt := time.Now().Add(backoff)
+
+	params := db.UpdateWebhookQueueStatusParams{
+		ID:       id,
+		Status:   "pending",
+		Attempts: &newAttempts,
+		NextAttempt: pgtype.Timestamptz{
+			Time:  nextAttempt,
+			Valid: true,
+		},
+	}
+
+	_, err := w.queries.UpdateWebhookQueueStatus(w.ctx, params)
+
+	if err != nil {
+		slog.Error("failed to schedule retry, marking as failed",
+			"queue_id", pgtypeToUUID(id),
+			"error", err,
+		)
+
+		if !w.markFailed(id) {
+			slog.Error("CRITICAL: failed to mark as failed after schedule error",
+				"queue_id", pgtypeToUUID(id),
+			)
+		}
+
+		return
+	}
+
+	slog.Info("scheduled webhook retry",
+		"queue_id", pgtypeToUUID(id),
+		"attempt", newAttempts,
+		"next_attempt", nextAttempt,
+		"backoff", backoff,
+	)
 }
 
 // pgtypeToUUID converts pgtype.UUID to uuid.UUID.
