@@ -74,3 +74,11 @@ type ListEmailsFilter struct {
 	Before    *time.Time
 	After     *time.Time
 }
+
+type SearchEmailsFilter struct {
+	AccountID uuid.UUID
+	Query     string
+	Folder    string // optional, empty means all folders
+	Limit     int
+	Offset    int
+}

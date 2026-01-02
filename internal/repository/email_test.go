@@ -568,3 +568,273 @@ func TestEmailRepository_Create_NilSlices(t *testing.T) {
 		t.Error("fetched CC should be empty slice, not nil")
 	}
 }
+
+func TestEmailRepository_Search(t *testing.T) {
+	repo, _, accountID := setupEmailTest(t)
+	ctx := context.Background()
+
+	// Create test emails with different content
+	testEmails := []domain.CreateEmailInput{
+		{
+			AccountID:  accountID,
+			UID:        1,
+			Folder:     "INBOX",
+			Subject:    "Invoice for January",
+			FromEmail:  "billing@company.com",
+			FromName:   "Billing Department",
+			Date:       time.Now().Add(-2 * time.Hour),
+			ParsedText: "Please find attached your invoice for January.",
+		},
+		{
+			AccountID:  accountID,
+			UID:        2,
+			Folder:     "INBOX",
+			Subject:    "Meeting Tomorrow",
+			FromEmail:  "john@example.com",
+			FromName:   "John Smith",
+			Date:       time.Now().Add(-1 * time.Hour),
+			ParsedText: "Let's discuss the project tomorrow at 3pm.",
+		},
+		{
+			AccountID:  accountID,
+			UID:        3,
+			Folder:     "Sent",
+			Subject:    "Re: Invoice Question",
+			FromEmail:  "me@example.com",
+			FromName:   "Me",
+			Date:       time.Now(),
+			ParsedText: "Thanks for the invoice clarification.",
+		},
+	}
+
+	for _, input := range testEmails {
+		_, err := repo.Create(ctx, input)
+
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+	}
+
+	t.Run("basic search", func(t *testing.T) {
+		filter := domain.SearchEmailsFilter{
+			AccountID: accountID,
+			Query:     "invoice",
+			Limit:     50,
+			Offset:    0,
+		}
+
+		emails, err := repo.Search(ctx, filter)
+
+		if err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+
+		if len(emails) != 2 {
+			t.Errorf("len = %d, want 2 (both invoice emails)", len(emails))
+		}
+	})
+
+	t.Run("search with folder filter", func(t *testing.T) {
+		filter := domain.SearchEmailsFilter{
+			AccountID: accountID,
+			Query:     "invoice",
+			Folder:    "INBOX",
+			Limit:     50,
+			Offset:    0,
+		}
+
+		emails, err := repo.Search(ctx, filter)
+
+		if err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+
+		if len(emails) != 1 {
+			t.Errorf("len = %d, want 1 (only INBOX invoice)", len(emails))
+		}
+	})
+
+	t.Run("search no results", func(t *testing.T) {
+		filter := domain.SearchEmailsFilter{
+			AccountID: accountID,
+			Query:     "nonexistent",
+			Limit:     50,
+			Offset:    0,
+		}
+
+		emails, err := repo.Search(ctx, filter)
+
+		if err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+
+		if len(emails) != 0 {
+			t.Errorf("len = %d, want 0", len(emails))
+		}
+	})
+
+	t.Run("search pagination", func(t *testing.T) {
+		filter := domain.SearchEmailsFilter{
+			AccountID: accountID,
+			Query:     "invoice",
+			Limit:     1,
+			Offset:    0,
+		}
+
+		emails, err := repo.Search(ctx, filter)
+
+		if err != nil {
+			t.Fatalf("Search failed: %v", err)
+		}
+
+		if len(emails) != 1 {
+			t.Errorf("len = %d, want 1", len(emails))
+		}
+
+		// Get second page
+		filter.Offset = 1
+		emails, err = repo.Search(ctx, filter)
+
+		if err != nil {
+			t.Fatalf("Search page 2 failed: %v", err)
+		}
+
+		if len(emails) != 1 {
+			t.Errorf("page 2 len = %d, want 1", len(emails))
+		}
+	})
+}
+
+func TestEmailRepository_CountSearch(t *testing.T) {
+	repo, _, accountID := setupEmailTest(t)
+	ctx := context.Background()
+
+	// Create test emails
+	testEmails := []domain.CreateEmailInput{
+		{
+			AccountID:  accountID,
+			UID:        1,
+			Folder:     "INBOX",
+			Subject:    "Payment received",
+			Date:       time.Now(),
+			ParsedText: "Your payment has been processed.",
+		},
+		{
+			AccountID:  accountID,
+			UID:        2,
+			Folder:     "INBOX",
+			Subject:    "Payment confirmation",
+			Date:       time.Now(),
+			ParsedText: "Payment confirmed for order #123.",
+		},
+		{
+			AccountID:  accountID,
+			UID:        3,
+			Folder:     "Sent",
+			Subject:    "Re: Payment",
+			Date:       time.Now(),
+			ParsedText: "Thanks for the payment update.",
+		},
+	}
+
+	for _, input := range testEmails {
+		_, err := repo.Create(ctx, input)
+
+		if err != nil {
+			t.Fatalf("Create failed: %v", err)
+		}
+	}
+
+	t.Run("count all matches", func(t *testing.T) {
+		count, err := repo.CountSearch(ctx, accountID, "payment", "")
+
+		if err != nil {
+			t.Fatalf("CountSearch failed: %v", err)
+		}
+
+		if count != 3 {
+			t.Errorf("count = %d, want 3", count)
+		}
+	})
+
+	t.Run("count with folder filter", func(t *testing.T) {
+		count, err := repo.CountSearch(ctx, accountID, "payment", "INBOX")
+
+		if err != nil {
+			t.Fatalf("CountSearch failed: %v", err)
+		}
+
+		if count != 2 {
+			t.Errorf("count = %d, want 2", count)
+		}
+	})
+
+	t.Run("count no matches", func(t *testing.T) {
+		count, err := repo.CountSearch(ctx, accountID, "nonexistent", "")
+
+		if err != nil {
+			t.Fatalf("CountSearch failed: %v", err)
+		}
+
+		if count != 0 {
+			t.Errorf("count = %d, want 0", count)
+		}
+	})
+}
+
+func TestEmailRepository_Search_ExcludesDeletedUpstream(t *testing.T) {
+	repo, _, accountID := setupEmailTest(t)
+	ctx := context.Background()
+
+	// Create an email
+	input := domain.CreateEmailInput{
+		AccountID:  accountID,
+		UID:        1,
+		Folder:     "INBOX",
+		Subject:    "Searchable email",
+		Date:       time.Now(),
+		ParsedText: "This email should be searchable.",
+	}
+
+	created, err := repo.Create(ctx, input)
+
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Verify it's searchable
+	filter := domain.SearchEmailsFilter{
+		AccountID: accountID,
+		Query:     "searchable",
+		Limit:     50,
+		Offset:    0,
+	}
+
+	emails, err := repo.Search(ctx, filter)
+
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	if len(emails) != 1 {
+		t.Errorf("len = %d, want 1", len(emails))
+	}
+
+	// Mark as deleted upstream
+	err = repo.MarkDeletedUpstream(ctx, created.ID)
+
+	if err != nil {
+		t.Fatalf("MarkDeletedUpstream failed: %v", err)
+	}
+
+	// Verify it's no longer searchable
+	emails, err = repo.Search(ctx, filter)
+
+	if err != nil {
+		t.Fatalf("Search after delete failed: %v", err)
+	}
+
+	if len(emails) != 0 {
+		t.Errorf("len = %d, want 0 (deleted emails excluded)", len(emails))
+	}
+}

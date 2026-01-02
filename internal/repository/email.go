@@ -19,6 +19,7 @@ import (
 var (
 	ErrEmailNotFound      = errors.New("email not found")
 	ErrEmailAlreadyExists = errors.New("email already exists")
+	ErrInvalidSearchQuery = errors.New("invalid search query syntax")
 )
 
 type EmailRepository struct {
@@ -233,6 +234,70 @@ func (r *EmailRepository) CountInFolder(ctx context.Context, accountID uuid.UUID
 
 	if err != nil {
 		return 0, fmt.Errorf("counting emails in folder: %w", err)
+	}
+
+	return count, nil
+}
+
+func (r *EmailRepository) Search(ctx context.Context, filter domain.SearchEmailsFilter) ([]domain.Email, error) {
+	params := db.SearchEmailsParams{
+		AccountID:          uuidToPgtype(filter.AccountID),
+		WebsearchToTsquery: filter.Query,
+		Limit:              int32(filter.Limit),
+		Offset:             int32(filter.Offset),
+	}
+
+	if filter.Folder != "" {
+		params.Folder = &filter.Folder
+	}
+
+	dbEmails, err := r.queries.SearchEmails(ctx, params)
+
+	if err != nil {
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) && pgErr.Code == "42601" {
+			return nil, ErrInvalidSearchQuery
+		}
+
+		return nil, fmt.Errorf("searching emails: %w", err)
+	}
+
+	emails := make([]domain.Email, 0, len(dbEmails))
+
+	for _, dbEmail := range dbEmails {
+		email, err := r.toEmail(dbEmail)
+
+		if err != nil {
+			return nil, fmt.Errorf("converting email %v: %w", dbEmail.ID, err)
+		}
+
+		emails = append(emails, *email)
+	}
+
+	return emails, nil
+}
+
+func (r *EmailRepository) CountSearch(ctx context.Context, accountID uuid.UUID, query string, folder string) (int64, error) {
+	params := db.CountSearchEmailsParams{
+		AccountID:          uuidToPgtype(accountID),
+		WebsearchToTsquery: query,
+	}
+
+	if folder != "" {
+		params.Folder = &folder
+	}
+
+	count, err := r.queries.CountSearchEmails(ctx, params)
+
+	if err != nil {
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) && pgErr.Code == "42601" {
+			return 0, ErrInvalidSearchQuery
+		}
+
+		return 0, fmt.Errorf("counting search results: %w", err)
 	}
 
 	return count, nil

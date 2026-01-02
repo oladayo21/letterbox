@@ -44,3 +44,19 @@ UPDATE emails SET deleted_upstream = true WHERE id = $1;
 -- name: CountEmailsInFolder :one
 SELECT COUNT(*) FROM emails
 WHERE account_id = $1 AND folder = $2 AND deleted_upstream = false;
+
+-- name: SearchEmails :many
+SELECT * FROM emails
+WHERE account_id = $1
+  AND deleted_upstream = false
+  AND search_vector @@ websearch_to_tsquery('english', $2)
+  AND (sqlc.narg('folder')::text IS NULL OR folder = sqlc.narg('folder'))
+ORDER BY date DESC
+LIMIT $3 OFFSET $4;
+
+-- name: CountSearchEmails :one
+SELECT COUNT(*) FROM emails
+WHERE account_id = $1
+  AND deleted_upstream = false
+  AND search_vector @@ websearch_to_tsquery('english', $2)
+  AND (sqlc.narg('folder')::text IS NULL OR folder = sqlc.narg('folder'));
