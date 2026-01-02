@@ -25,14 +25,10 @@ func NewSearchHandler(accountRepo *repository.AccountRepository, searchSvc *sear
 }
 
 type searchResponse struct {
-	Data       []messageListItem `json:"data"`
-	Pagination paginationInfo    `json:"pagination"`
-}
-
-type paginationInfo struct {
-	Limit  int   `json:"limit"`
-	Offset int   `json:"offset"`
-	Total  int64 `json:"total"`
+	Messages []messageListItem `json:"messages"`
+	Total    int64             `json:"total"`
+	Limit    int               `json:"limit"`
+	Offset   int               `json:"offset"`
 }
 
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -40,6 +36,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "query parameter 'q' is required")
+
 		return
 	}
 
@@ -47,6 +44,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	if accountIDStr == "" {
 		writeError(w, http.StatusBadRequest, "query parameter 'account_id' is required")
+
 		return
 	}
 
@@ -54,6 +52,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid account_id")
+
 		return
 	}
 
@@ -62,71 +61,91 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	if errors.Is(err, repository.ErrAccountNotFound) {
 		writeError(w, http.StatusNotFound, "account not found")
+
 		return
 	}
 
 	if err != nil {
 		slog.Error("failed to get account", "account_id", accountID, "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to get account")
+
 		return
 	}
 
 	folder := r.URL.Query().Get("folder")
-	limit, offset := parseSearchParams(r)
+
+	limit, offset, err := parseSearchParams(r)
+
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
 
 	result, err := h.searchSvc.Search(r.Context(), accountID, query, folder, limit, offset)
 
 	if errors.Is(err, search.ErrEmptyQuery) {
 		writeError(w, http.StatusBadRequest, "search query cannot be empty")
+
 		return
 	}
 
 	if errors.Is(err, repository.ErrInvalidSearchQuery) {
 		writeError(w, http.StatusBadRequest, "invalid search query syntax")
+
 		return
 	}
 
 	if err != nil {
-		slog.Error("search failed", "account_id", accountID, "query", query, "error", err)
+		slog.Error("search failed",
+			"account_id", accountID,
+			"query", query,
+			"folder", folder,
+			"limit", limit,
+			"offset", offset,
+			"error", err)
 		writeError(w, http.StatusInternalServerError, "search failed")
+
 		return
 	}
 
-	data := make([]messageListItem, len(result.Emails))
+	messages := make([]messageListItem, len(result.Emails))
 
 	for i, e := range result.Emails {
-		data[i] = toMessageListItem(&e)
+		messages[i] = toMessageListItem(&e)
 	}
 
 	writeJSON(w, http.StatusOK, searchResponse{
-		Data: data,
-		Pagination: paginationInfo{
-			Limit:  result.Limit,
-			Offset: result.Offset,
-			Total:  result.Total,
-		},
+		Messages: messages,
+		Total:    result.Total,
+		Limit:    result.Limit,
+		Offset:   result.Offset,
 	})
 }
 
-func parseSearchParams(r *http.Request) (limit, offset int) {
+func parseSearchParams(r *http.Request) (limit, offset int, err error) {
 	limit = defaultLimit
 	offset = 0
 
 	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
+		limit, err = strconv.Atoi(limitStr)
 
-			if limit > maxLimit {
-				limit = maxLimit
-			}
+		if err != nil || limit < 1 {
+			return 0, 0, errors.New("invalid limit")
+		}
+
+		if limit > maxLimit {
+			limit = maxLimit
 		}
 	}
 
 	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
-			offset = o
+		offset, err = strconv.Atoi(offsetStr)
+
+		if err != nil || offset < 0 {
+			return 0, 0, errors.New("invalid offset")
 		}
 	}
 
-	return limit, offset
+	return limit, offset, nil
 }
