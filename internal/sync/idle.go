@@ -57,8 +57,9 @@ func (e EventType) String() string {
 
 // IdleEvent represents a mailbox update received during IDLE.
 type IdleEvent struct {
-	Type   EventType
-	Folder string
+	Type      EventType
+	AccountID string
+	Folder    string
 
 	// NumMessages is the new total message count (for EventNewMessage).
 	// Only set when the server provides EXISTS response.
@@ -70,11 +71,12 @@ type IdleEvent struct {
 
 // IdleConfig contains configuration for an IDLE connection.
 type IdleConfig struct {
-	Host     string
-	Port     int
-	Username string
-	Password string
-	Folder   string
+	AccountID string
+	Host      string
+	Port      int
+	Username  string
+	Password  string
+	Folder    string
 }
 
 // IdleConnection maintains an IMAP IDLE connection and emits events
@@ -323,6 +325,7 @@ func (ic *IdleConnection) handleMailboxUpdate(data *imapclient.UnilateralDataMai
 
 	event := IdleEvent{
 		Type:        EventNewMessage,
+		AccountID:   ic.config.AccountID,
 		Folder:      ic.config.Folder,
 		NumMessages: data.NumMessages,
 	}
@@ -351,9 +354,10 @@ func (ic *IdleConnection) handleMailboxUpdate(data *imapclient.UnilateralDataMai
 // handleExpunge is called by go-imap when a message is deleted.
 func (ic *IdleConnection) handleExpunge(seqNum uint32) {
 	event := IdleEvent{
-		Type:   EventExpunge,
-		Folder: ic.config.Folder,
-		SeqNum: seqNum,
+		Type:      EventExpunge,
+		AccountID: ic.config.AccountID,
+		Folder:    ic.config.Folder,
+		SeqNum:    seqNum,
 	}
 
 	ic.mu.Lock()
