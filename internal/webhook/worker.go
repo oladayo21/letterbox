@@ -34,9 +34,6 @@ const (
 	// DefaultMaxRetries is the default maximum number of delivery attempts.
 	DefaultMaxRetries = 5
 
-	// DefaultBaseBackoff is the base duration for exponential backoff.
-	DefaultBaseBackoff = 30 * time.Second
-
 	// SignatureHeader is the header name for the webhook signature.
 	SignatureHeader = "X-Letterbox-Signature"
 
@@ -50,7 +47,6 @@ type WorkerConfig struct {
 	BatchSize    int32
 	HTTPTimeout  time.Duration
 	MaxRetries   int32
-	BaseBackoff  time.Duration
 }
 
 // Worker polls the webhook queue and delivers payloads.
@@ -89,10 +85,6 @@ func NewWorker(
 
 	if config.MaxRetries == 0 {
 		config.MaxRetries = DefaultMaxRetries
-	}
-
-	if config.BaseBackoff == 0 {
-		config.BaseBackoff = DefaultBaseBackoff
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -365,7 +357,17 @@ func (w *Worker) markFailed(id pgtype.UUID) bool {
 	return true
 }
 
-// scheduleRetry schedules a retry with exponential backoff, or marks as failed if max retries exceeded.
+// backoffSchedule defines the retry intervals per STORIES.md spec.
+// After each failed attempt, wait this duration before retrying.
+var backoffSchedule = []time.Duration{
+	1 * time.Minute,  // After 1st failure
+	5 * time.Minute,  // After 2nd failure
+	15 * time.Minute, // After 3rd failure
+	1 * time.Hour,    // After 4th failure
+	4 * time.Hour,    // After 5th failure (last retry)
+}
+
+// scheduleRetry schedules a retry with backoff, or marks as failed if max retries exceeded.
 func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
 	newAttempts := currentAttempts + 1
 
@@ -377,14 +379,23 @@ func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
 			"max_retries", w.config.MaxRetries,
 		)
 
-		w.markFailed(id)
+		if !w.markFailed(id) {
+			slog.Error("CRITICAL: failed to mark as failed after max retries",
+				"queue_id", pgtypeToUUID(id),
+			)
+		}
 
 		return
 	}
 
-	// Calculate exponential backoff: base * 2^attempts
-	// e.g., 30s, 60s, 120s, 240s, 480s for base=30s
-	backoff := w.config.BaseBackoff * time.Duration(1<<currentAttempts)
+	// Get backoff duration from schedule
+	backoffIndex := int(currentAttempts)
+
+	if backoffIndex >= len(backoffSchedule) {
+		backoffIndex = len(backoffSchedule) - 1
+	}
+
+	backoff := backoffSchedule[backoffIndex]
 	nextAttempt := time.Now().Add(backoff)
 
 	params := db.UpdateWebhookQueueStatusParams{
@@ -400,10 +411,16 @@ func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
 	_, err := w.queries.UpdateWebhookQueueStatus(w.ctx, params)
 
 	if err != nil {
-		slog.Error("failed to schedule retry",
+		slog.Error("failed to schedule retry, marking as failed",
 			"queue_id", pgtypeToUUID(id),
 			"error", err,
 		)
+
+		if !w.markFailed(id) {
+			slog.Error("CRITICAL: failed to mark as failed after schedule error",
+				"queue_id", pgtypeToUUID(id),
+			)
+		}
 
 		return
 	}
