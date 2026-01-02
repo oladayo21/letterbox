@@ -15,6 +15,7 @@ import (
 
 var (
 	ErrWebhookNotFound = errors.New("webhook not found")
+	ErrEmptyAccountID  = errors.New("webhook account_id is required")
 	ErrEmptyURL        = errors.New("webhook URL is required")
 	ErrEmptySecret     = errors.New("webhook secret is required")
 )
@@ -37,6 +38,10 @@ func NewWebhookRepository(queries *db.Queries, encryptionKey []byte) (*WebhookRe
 }
 
 func (r *WebhookRepository) Create(ctx context.Context, input domain.CreateWebhookInput) (*domain.Webhook, error) {
+
+	if input.AccountID == uuid.Nil {
+		return nil, ErrEmptyAccountID
+	}
 
 	if input.URL == "" {
 		return nil, ErrEmptyURL

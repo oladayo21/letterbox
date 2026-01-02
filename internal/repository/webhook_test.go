@@ -45,21 +45,6 @@ func createTestAccount(t *testing.T, queries *db.Queries) uuid.UUID {
 	return uuid.UUID(account.ID.Bytes)
 }
 
-func cleanupWebhooks(t *testing.T, queries *db.Queries) {
-	t.Helper()
-
-	_, err := queries.ListWebhooks(context.Background())
-
-	if err != nil {
-		return
-	}
-
-	// Clean up in order: webhooks depend on accounts
-	ctx := context.Background()
-
-	_, _ = ctx, queries
-}
-
 func setupWebhookTestDB(t *testing.T) *db.Queries {
 	t.Helper()
 
@@ -67,10 +52,19 @@ func setupWebhookTestDB(t *testing.T) *db.Queries {
 
 	// Clean webhooks table
 	ctx := context.Background()
-	webhooks, _ := queries.ListWebhooks(ctx)
+
+	webhooks, err := queries.ListWebhooks(ctx)
+
+	if err != nil {
+		t.Fatalf("listing webhooks for cleanup: %v", err)
+	}
 
 	for _, wh := range webhooks {
-		_, _ = queries.DeleteWebhook(ctx, wh.ID)
+		_, err := queries.DeleteWebhook(ctx, wh.ID)
+
+		if err != nil {
+			t.Fatalf("deleting webhook %v for cleanup: %v", wh.ID, err)
+		}
 	}
 
 	return queries
@@ -136,6 +130,28 @@ func TestWebhookRepository_Create(t *testing.T) {
 
 	if webhook.Secret != input.Secret {
 		t.Errorf("secret not decrypted correctly: got %q, want %q", webhook.Secret, input.Secret)
+	}
+}
+
+func TestWebhookRepository_Create_EmptyAccountID(t *testing.T) {
+	queries := setupWebhookTestDB(t)
+	repo := mustNewWebhookRepo(t, queries, testEncryptionKey)
+	ctx := context.Background()
+
+	input := domain.CreateWebhookInput{
+		AccountID: uuid.Nil,
+		URL:       "https://example.com/webhook",
+		Secret:    "secret",
+	}
+
+	_, err := repo.Create(ctx, input)
+
+	if err == nil {
+		t.Error("expected error for empty account_id")
+	}
+
+	if !errors.Is(err, repository.ErrEmptyAccountID) {
+		t.Errorf("expected ErrEmptyAccountID, got %v", err)
 	}
 }
 
