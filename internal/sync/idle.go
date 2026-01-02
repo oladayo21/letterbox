@@ -7,20 +7,27 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"sync"
+	gosync "sync"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	letterboximap "github.com/oladayo21/letterbox/internal/imap"
 )
 
+// Reuse error definitions from imap package for errors.Is() compatibility.
 var (
-	ErrConnectionFailed = errors.New("failed to connect to IMAP server")
-	ErrAuthFailed       = errors.New("authentication failed")
-	ErrSelectFailed     = errors.New("failed to select folder")
+	ErrConnectionFailed = letterboximap.ErrConnectionFailed
+	ErrAuthFailed       = letterboximap.ErrAuthFailed
+	ErrSelectFailed     = letterboximap.ErrSelectFailed
+)
+
+// Errors specific to IDLE connections.
+var (
 	ErrIdleFailed       = errors.New("failed to enter IDLE mode")
 	ErrIdleNotSupported = errors.New("server does not support IDLE")
 	ErrAlreadyClosed    = errors.New("connection already closed")
+	ErrCapsFailed       = errors.New("failed to retrieve server capabilities")
 )
 
 const (
@@ -79,7 +86,7 @@ type IdleConnection struct {
 	client  *imapclient.Client
 	idleCmd *imapclient.IdleCommand
 
-	mu     sync.Mutex
+	mu     gosync.Mutex
 	closed bool
 
 	// For clean shutdown
@@ -87,11 +94,15 @@ type IdleConnection struct {
 }
 
 // NewIdleConnection establishes an IMAP connection, logs in, selects
-// the folder, and enters IDLE mode. Events are emitted on the returned
-// channel when new messages arrive or messages are expunged.
+// the folder, and enters IDLE mode. Use Events() to receive mailbox
+// updates when new messages arrive or messages are expunged.
 //
 // The caller must call Close() to release resources.
 func NewIdleConnection(ctx context.Context, config IdleConfig) (*IdleConnection, error) {
+	if err := config.validate(); err != nil {
+		return nil, err
+	}
+
 	ic := &IdleConnection{
 		config: config,
 		events: make(chan IdleEvent, 100),
@@ -103,6 +114,30 @@ func NewIdleConnection(ctx context.Context, config IdleConfig) (*IdleConnection,
 	}
 
 	return ic, nil
+}
+
+func (c IdleConfig) validate() error {
+	if c.Host == "" {
+		return errors.New("host is required")
+	}
+
+	if c.Port <= 0 {
+		return errors.New("port must be positive")
+	}
+
+	if c.Username == "" {
+		return errors.New("username is required")
+	}
+
+	if c.Password == "" {
+		return errors.New("password is required")
+	}
+
+	if c.Folder == "" {
+		return errors.New("folder is required")
+	}
+
+	return nil
 }
 
 // Events returns the channel on which mailbox events are emitted.
@@ -127,27 +162,29 @@ func (ic *IdleConnection) Close() error {
 
 	ic.closed = true
 	close(ic.done)
+	close(ic.events)
 	ic.mu.Unlock()
 
 	var errs []error
 
 	if ic.idleCmd != nil {
 		if err := ic.idleCmd.Close(); err != nil {
+			slog.Warn("error closing IDLE command", "error", err)
 			errs = append(errs, fmt.Errorf("closing IDLE: %w", err))
 		}
 	}
 
 	if ic.client != nil {
 		if err := ic.client.Logout().Wait(); err != nil {
+			slog.Warn("error during IMAP logout", "error", err)
 			errs = append(errs, fmt.Errorf("logout: %w", err))
 		}
 
 		if err := ic.client.Close(); err != nil {
+			slog.Warn("error closing IMAP connection", "error", err)
 			errs = append(errs, fmt.Errorf("close: %w", err))
 		}
 	}
-
-	close(ic.events)
 
 	if len(errs) > 0 {
 		return errors.Join(errs...)
@@ -173,7 +210,7 @@ func (ic *IdleConnection) connect(ctx context.Context) error {
 	client, err := ic.dial(ctx, addr, handler)
 
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrConnectionFailed, err)
+		return fmt.Errorf("%w: %w", ErrConnectionFailed, err)
 	}
 
 	ic.client = client
@@ -181,12 +218,20 @@ func (ic *IdleConnection) connect(ctx context.Context) error {
 	if err := client.Login(ic.config.Username, ic.config.Password).Wait(); err != nil {
 		client.Close()
 
-		return fmt.Errorf("%w: %v", ErrAuthFailed, err)
+		return fmt.Errorf("%w: %w", ErrAuthFailed, err)
 	}
 
 	// Check for IDLE capability
 	caps := client.Caps()
-	if caps == nil || !caps.Has(imap.CapIdle) {
+
+	if caps == nil {
+		client.Logout().Wait()
+		client.Close()
+
+		return ErrCapsFailed
+	}
+
+	if !caps.Has(imap.CapIdle) {
 		client.Logout().Wait()
 		client.Close()
 
@@ -198,7 +243,7 @@ func (ic *IdleConnection) connect(ctx context.Context) error {
 		client.Logout().Wait()
 		client.Close()
 
-		return fmt.Errorf("%w: %v", ErrSelectFailed, err)
+		return fmt.Errorf("%w: %w", ErrSelectFailed, err)
 	}
 
 	// Enter IDLE mode
@@ -208,7 +253,7 @@ func (ic *IdleConnection) connect(ctx context.Context) error {
 		client.Logout().Wait()
 		client.Close()
 
-		return fmt.Errorf("%w: %v", ErrIdleFailed, err)
+		return fmt.Errorf("%w: %w", ErrIdleFailed, err)
 	}
 
 	ic.idleCmd = idleCmd
@@ -270,52 +315,52 @@ func (ic *IdleConnection) dialStartTLS(conn net.Conn, opts *imapclient.Options) 
 	return client, nil
 }
 
+// handleMailboxUpdate is called by go-imap when the mailbox state changes.
 func (ic *IdleConnection) handleMailboxUpdate(data *imapclient.UnilateralDataMailbox) {
-	ic.mu.Lock()
-	closed := ic.closed
-	ic.mu.Unlock()
-
-	if closed {
-		return
-	}
-
-	if data.NumMessages != nil {
-		event := IdleEvent{
-			Type:        EventNewMessage,
-			Folder:      ic.config.Folder,
-			NumMessages: data.NumMessages,
-		}
-
-		select {
-		case ic.events <- event:
-			slog.Debug("emitted new message event",
-				"folder", ic.config.Folder,
-				"num_messages", *data.NumMessages,
-			)
-		case <-ic.done:
-			// Connection is closing
-		default:
-			slog.Warn("event channel full, dropping event",
-				"folder", ic.config.Folder,
-				"type", event.Type.String(),
-			)
-		}
-	}
-}
-
-func (ic *IdleConnection) handleExpunge(seqNum uint32) {
-	ic.mu.Lock()
-	closed := ic.closed
-	ic.mu.Unlock()
-
-	if closed {
+	if data.NumMessages == nil {
 		return
 	}
 
 	event := IdleEvent{
+		Type:        EventNewMessage,
+		Folder:      ic.config.Folder,
+		NumMessages: data.NumMessages,
+	}
+
+	ic.mu.Lock()
+	defer ic.mu.Unlock()
+
+	if ic.closed {
+		return
+	}
+
+	select {
+	case ic.events <- event:
+		slog.Debug("emitted new message event",
+			"folder", ic.config.Folder,
+			"num_messages", *data.NumMessages,
+		)
+	default:
+		slog.Warn("event channel full, dropping event",
+			"folder", ic.config.Folder,
+			"type", event.Type.String(),
+		)
+	}
+}
+
+// handleExpunge is called by go-imap when a message is deleted.
+func (ic *IdleConnection) handleExpunge(seqNum uint32) {
+	event := IdleEvent{
 		Type:   EventExpunge,
 		Folder: ic.config.Folder,
 		SeqNum: seqNum,
+	}
+
+	ic.mu.Lock()
+	defer ic.mu.Unlock()
+
+	if ic.closed {
+		return
 	}
 
 	select {
@@ -324,8 +369,6 @@ func (ic *IdleConnection) handleExpunge(seqNum uint32) {
 			"folder", ic.config.Folder,
 			"seq_num", seqNum,
 		)
-	case <-ic.done:
-		// Connection is closing
 	default:
 		slog.Warn("event channel full, dropping event",
 			"folder", ic.config.Folder,
@@ -391,7 +434,7 @@ func HasIdleCapability(ctx context.Context, host string, port int, username, pas
 	caps := client.Caps()
 
 	if caps == nil {
-		return false, nil
+		return false, ErrCapsFailed
 	}
 
 	return caps.Has(imap.CapIdle), nil
