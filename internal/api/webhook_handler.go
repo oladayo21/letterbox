@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/oladayo21/letterbox/internal/domain"
 	"github.com/oladayo21/letterbox/internal/repository"
@@ -65,7 +66,13 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountID, _ := uuid.Parse(req.AccountID) // Already validated
+	accountID, err := uuid.Parse(req.AccountID)
+
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid account_id format")
+
+		return
+	}
 
 	input := domain.CreateWebhookInput{
 		AccountID: accountID,
@@ -90,6 +97,15 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 		if errors.Is(err, repository.ErrEmptySecret) {
 			writeError(w, http.StatusBadRequest, "secret is required")
+
+			return
+		}
+
+		// Check for FK violation (non-existent account)
+		var pgErr *pgconn.PgError
+
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			writeError(w, http.StatusBadRequest, "account not found")
 
 			return
 		}
