@@ -18,6 +18,7 @@ WHERE account_id = $1 AND folder = $2 AND uid = $3;
 SELECT * FROM emails
 WHERE account_id = $1
   AND folder = $2
+  AND deleted_upstream = false
   AND (sqlc.narg('before')::timestamptz IS NULL OR date < sqlc.narg('before'))
   AND (sqlc.narg('after')::timestamptz IS NULL OR date > sqlc.narg('after'))
 ORDER BY date DESC
