@@ -152,9 +152,14 @@ func (c *Coordinator) RemoveAccount(accountID uuid.UUID) error {
 	poolErr := c.pool.RemoveAccount(accountIDStr)
 	pollerErr := c.poller.RemoveAccount(accountIDStr)
 
-	// Clean up last UID tracking
+	// Clean up last UID tracking for all folders
 	c.mu.Lock()
-	delete(c.lastUIDs, accountIDStr+":INBOX")
+	for key := range c.lastUIDs {
+		// Keys are formatted as "accountID:folder"
+		if len(key) > len(accountIDStr) && key[:len(accountIDStr)+1] == accountIDStr+":" {
+			delete(c.lastUIDs, key)
+		}
+	}
 	c.mu.Unlock()
 
 	if poolErr != nil && pollerErr != nil {
@@ -183,16 +188,23 @@ func (c *Coordinator) Close() error {
 
 	c.cancel()
 
-	// Close pool and poller
-	c.pool.Close()
-	c.poller.Close()
+	// Close pool and poller, collecting any errors
+	var errs []error
+
+	if err := c.pool.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := c.poller.Close(); err != nil {
+		errs = append(errs, err)
+	}
 
 	// Wait for event processors to finish
 	c.wg.Wait()
 
 	slog.Info("sync coordinator closed")
 
-	return nil
+	return errors.Join(errs...)
 }
 
 // processPoolEvents handles events from the IDLE pool.
@@ -311,21 +323,33 @@ func (c *Coordinator) handleEvent(event IdleEvent) {
 	)
 
 	// Ingest each new email
-	var maxUID uint32
+	// Only track successfully ingested UIDs to avoid skipping on transient failures
+	var lastSuccessUID uint32
 
 	for _, uid := range newUIDs {
+		// Check for shutdown
+		select {
+		case <-c.ctx.Done():
+			slog.Debug("stopping ingest - coordinator closing",
+				"account_id", event.AccountID,
+				"remaining", len(newUIDs),
+			)
+
+			return
+		default:
+		}
+
 		email, err := c.ingester.IngestEmail(c.ctx, accountID, event.Folder, uid)
 
 		if err != nil {
 			if errors.Is(err, ingest.ErrEmailAlreadyExists) {
-				// Already ingested, just update last UID
-				if uid > maxUID {
-					maxUID = uid
-				}
+				// Already ingested, safe to advance
+				lastSuccessUID = uid
 
 				continue
 			}
 
+			// Don't advance lastUID on failure - will retry next time
 			slog.Error("failed to ingest email",
 				"account_id", event.AccountID,
 				"folder", event.Folder,
@@ -336,6 +360,8 @@ func (c *Coordinator) handleEvent(event IdleEvent) {
 			continue
 		}
 
+		lastSuccessUID = uid
+
 		slog.Info("ingested email",
 			"account_id", event.AccountID,
 			"folder", event.Folder,
@@ -343,24 +369,34 @@ func (c *Coordinator) handleEvent(event IdleEvent) {
 			"subject", email.Subject,
 		)
 
-		if uid > maxUID {
-			maxUID = uid
-		}
-
 		// Call event handler if set (for webhooks)
 		if c.eventHandler != nil {
-			c.eventHandler(c.ctx, email)
+			c.safeCallEventHandler(email)
 		}
 	}
 
-	// Update last known UID
-	if maxUID > 0 {
+	// Update last known UID only to successfully processed UIDs
+	if lastSuccessUID > 0 {
 		c.mu.Lock()
-		if maxUID > c.lastUIDs[uidKey] {
-			c.lastUIDs[uidKey] = maxUID
+		if lastSuccessUID > c.lastUIDs[uidKey] {
+			c.lastUIDs[uidKey] = lastSuccessUID
 		}
 		c.mu.Unlock()
 	}
+}
+
+// safeCallEventHandler calls the event handler with panic recovery.
+func (c *Coordinator) safeCallEventHandler(email *domain.Email) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("event handler panicked",
+				"panic", r,
+				"email_id", email.ID,
+			)
+		}
+	}()
+
+	c.eventHandler(c.ctx, email)
 }
 
 // Stats returns current coordinator statistics.
