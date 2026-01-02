@@ -4,7 +4,7 @@ Stories ordered for sequential implementation. Each story is independently deplo
 
 ---
 
-## Epic 0: Project Foundation
+## Epic 0: Project Foundation ✅
 *Setup the project skeleton and development environment*
 
 ### Story 0.1: Project Scaffold
@@ -68,7 +68,7 @@ Load configuration from environment.
 
 ---
 
-## Epic 1: Account Management
+## Epic 1: Account Management ✅
 *CRUD for IMAP/SMTP account configuration*
 
 ### Story 1.1: Account Model + DB Operations
@@ -133,7 +133,7 @@ Validate IMAP credentials work before saving account.
 
 ---
 
-## Epic 2: Email Reading (Core)
+## Epic 2: Email Reading (Core) ✅
 *Fetch and store emails from IMAP*
 
 ### Story 2.1: Email Model + DB Operations
@@ -314,7 +314,7 @@ Get full email by UID.
 
 ---
 
-## Epic 3: Real-time Sync Engine
+## Epic 3: Real-time Sync Engine ✅
 *Keep local mirror in sync with IMAP*
 
 ### Story 3.1a: Single IMAP IDLE Connection
@@ -397,17 +397,17 @@ Orchestrate IDLE + polling, process new email events.
 
 ---
 
-## Epic 4: Webhook Engine
+## Epic 4: Webhook Engine ✅
 *Reliable webhook delivery with retries*
 
-### Story 4.1: Webhook Subscription Model
+### Story 4.1: Webhook Subscription Model ✅
 **Points**: 1
 
 Store webhook subscriptions.
 
 **Tasks**:
-- [ ] sqlc queries: `CreateWebhook`, `ListWebhooks`, `DeleteWebhook`, `GetWebhooksForAccount`
-- [ ] Encrypt webhook secret
+- [x] sqlc queries: `CreateWebhook`, `ListWebhooks`, `DeleteWebhook`, `GetWebhooksForAccount`
+- [x] Encrypt webhook secret
 
 **Acceptance**:
 - CRUD operations work
@@ -417,15 +417,15 @@ Store webhook subscriptions.
 
 ---
 
-### Story 4.2: Webhook REST Endpoints
+### Story 4.2: Webhook REST Endpoints ✅
 **Points**: 1
 
 Manage webhook subscriptions via API.
 
 **Tasks**:
-- [ ] `POST /webhooks` - create subscription
-- [ ] `GET /webhooks` - list subscriptions
-- [ ] `DELETE /webhooks/{id}` - remove subscription
+- [x] `POST /webhooks` - create subscription
+- [x] `GET /webhooks` - list subscriptions
+- [x] `DELETE /webhooks/{id}` - remove subscription
 
 **Acceptance**:
 - Can create subscription with URL + secret
@@ -435,35 +435,35 @@ Manage webhook subscriptions via API.
 
 ---
 
-### Story 4.3: Webhook Queue Producer
+### Story 4.3: Webhook Queue Producer ✅
 **Points**: 2
 
 Queue webhook deliveries when new emails arrive.
 
 **Tasks**:
-- [ ] On new email stored, find matching webhook subscriptions
-- [ ] Build payload (full email, handle attachment size threshold)
-- [ ] Insert into `webhook_queue` with status=pending
+- [x] On new email stored, find matching webhook subscriptions
+- [x] Build payload (full email, handle attachment size threshold)
+- [x] Insert into `webhook_queue` with status=pending
 
 **Acceptance**:
 - New email → queue entry created for each subscription
-- Attachments >1MB → use S3 URL instead of inline
+- Attachments use S3 presigned URLs
 
 **Depends on**: 4.1, 3.3
 
 ---
 
-### Story 4.4a: Webhook Delivery Worker
+### Story 4.4a: Webhook Delivery Worker ✅
 **Points**: 2
 
 Basic webhook delivery without retries.
 
 **Tasks**:
-- [ ] Create `internal/webhook/worker.go`
-- [ ] Poll `webhook_queue` for pending items
-- [ ] POST payload to webhook URL
-- [ ] On success: mark delivered
-- [ ] On failure: mark failed (no retry yet)
+- [x] Create `internal/webhook/worker.go`
+- [x] Poll `webhook_queue` for pending items
+- [x] POST payload to webhook URL
+- [x] On success: mark delivered
+- [x] On failure: mark failed (no retry yet)
 
 **Acceptance**:
 - Successful delivery → status=delivered
@@ -474,16 +474,16 @@ Basic webhook delivery without retries.
 
 ---
 
-### Story 4.4b: Webhook Retry with Backoff
+### Story 4.4b: Webhook Retry with Backoff ✅
 **Points**: 1
 
 Add exponential backoff retry logic.
 
 **Tasks**:
-- [ ] On failure: increment attempts, calculate next_attempt
-- [ ] Backoff: 1m, 5m, 15m, 1h, 4h
-- [ ] Max 5 attempts, then mark permanently failed
-- [ ] Query filters by `next_attempt <= now()`
+- [x] On failure: increment attempts, calculate next_attempt
+- [x] Backoff: 1m, 5m, 15m, 1h, 4h
+- [x] Max 5 attempts, then mark permanently failed
+- [x] Query filters by `next_attempt <= now()`
 
 **Acceptance**:
 - 500 response → retries with increasing delays
@@ -494,16 +494,16 @@ Add exponential backoff retry logic.
 
 ---
 
-### Story 4.5: Webhook Signature Verification
+### Story 4.5: Webhook Signature Verification ✅
 **Points**: 1
 
 Sign payloads for receivers to verify.
 
 **Tasks**:
-- [ ] HMAC-SHA256 of payload using webhook secret
-- [ ] Add `X-Letterbox-Signature` header
-- [ ] Add `X-Letterbox-Timestamp` for replay protection
-- [ ] Document verification in README
+- [x] HMAC-SHA256 of payload using webhook secret
+- [x] Add `X-Letterbox-Signature` header
+- [x] Add `X-Letterbox-Timestamp` for replay protection
+- [x] Document verification in README
 
 **Acceptance**:
 - Signature matches when verified with secret
