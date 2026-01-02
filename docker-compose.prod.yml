@@ -1,0 +1,43 @@
+# Production deployment with Traefik reverse proxy
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  letterbox:
+    image: ghcr.io/oladayo21/letterbox:latest
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - traefik
+      - default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik"
+      - "traefik.http.routers.letterbox.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.letterbox.entrypoints=websecure"
+      - "traefik.http.routers.letterbox.tls.certresolver=letsencrypt"
+      - "traefik.http.services.letterbox.loadbalancer.server.port=8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: letterbox
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: letterbox
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U letterbox"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
+
+networks:
+  traefik:
+    external: true
