@@ -11,8 +11,8 @@ IMAP-to-REST facade with webhook support. Expose email accounts via REST API wit
 | 2. Email Reading | Complete |
 | 3. Real-time Sync | Complete |
 | 4. Webhook Engine | Complete |
-| 5. Search | **Next** |
-| 6. Production Readiness | Pending |
+| 5. Search | Complete |
+| 6. Production Readiness | Complete |
 
 ## Architecture
 
@@ -62,9 +62,12 @@ IMAP-to-REST facade with webhook support. Expose email accounts via REST API wit
 - REST API for reading emails across multiple IMAP accounts
 - Real-time sync via IMAP IDLE (with polling fallback for non-IDLE servers)
 - Webhooks on new email arrival with signature verification
-- Full-text search via PostgreSQL (coming in Epic 5)
+- Full-text search via PostgreSQL
 - Attachment storage on S3-compatible backends
 - Encrypted credential storage
+- Health and readiness endpoints
+- Graceful shutdown handling
+- Docker support
 
 ## API Endpoints
 
@@ -90,10 +93,16 @@ IMAP-to-REST facade with webhook support. Expose email accounts via REST API wit
 | GET | `/webhooks` | List all webhooks |
 | DELETE | `/webhooks/{id}` | Delete webhook |
 
+### Search
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/search?q=...&account_id=...` | Full-text search |
+
 ### Health
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/health` | Liveness check |
+| GET | `/health` | Liveness check (always 200) |
+| GET | `/ready` | Readiness check (DB + S3) |
 
 ## Webhook Signature Verification
 
@@ -240,18 +249,66 @@ make migrate-up
 make run
 ```
 
+## Docker
+
+### Build Image
+
+```bash
+make docker-build
+# or with custom tag
+make docker-build DOCKER_TAG=v1.0.0
+```
+
+### Run Container
+
+```bash
+# With .env file
+docker run --rm -p 8080:8080 --env-file .env letterbox:latest
+
+# Or with explicit env vars
+docker run --rm -p 8080:8080 \
+  -e LETTERBOX_DATABASE_URL="postgres://..." \
+  -e LETTERBOX_ENCRYPTION_KEY="..." \
+  -e LETTERBOX_API_KEY="..." \
+  -e LETTERBOX_S3_ENDPOINT="..." \
+  -e LETTERBOX_S3_BUCKET="letterbox" \
+  -e LETTERBOX_S3_ACCESS_KEY="..." \
+  -e LETTERBOX_S3_SECRET_KEY="..." \
+  letterbox:latest
+```
+
+### Run Migrations
+
+Migrations are included in the Docker image at `/app/migrations`. Run them using golang-migrate:
+
+```bash
+docker run --rm \
+  -v $(pwd)/migrations:/migrations \
+  migrate/migrate \
+  -path=/migrations \
+  -database="postgres://user:pass@host:5432/letterbox?sslmode=disable" \
+  up
+```
+
 ## Configuration
 
-Copy `.envrc.example` to `.envrc` and configure:
+Copy `.env.example` to `.env` and configure:
 
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `S3_ENDPOINT` | S3-compatible storage endpoint |
-| `S3_BUCKET` | Bucket for attachments |
-| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | Storage credentials |
-| `LETTERBOX_ENCRYPTION_KEY` | AES-256 key for credential encryption |
-| `API_KEY` | API authentication key |
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `LETTERBOX_DATABASE_URL` | Yes | - | PostgreSQL connection string |
+| `LETTERBOX_ENCRYPTION_KEY` | Yes | - | AES-256 key (64 hex chars) for credential encryption |
+| `LETTERBOX_API_KEY` | Yes | - | API authentication key |
+| `LETTERBOX_S3_ENDPOINT` | Yes | - | S3-compatible storage endpoint |
+| `LETTERBOX_S3_BUCKET` | Yes | - | Bucket for attachments |
+| `LETTERBOX_S3_ACCESS_KEY` | Yes | - | S3 access key |
+| `LETTERBOX_S3_SECRET_KEY` | Yes | - | S3 secret key |
+| `LETTERBOX_S3_REGION` | No | `auto` | S3 region |
+| `LETTERBOX_PORT` | No | `8080` | HTTP server port |
+| `LETTERBOX_LOG_LEVEL` | No | `info` | Log level (debug, info, warn, error) |
+| `LETTERBOX_LOG_FORMAT` | No | `json` | Log format (json, text) |
+
+Generate encryption key: `openssl rand -hex 32`
 
 ## Development
 

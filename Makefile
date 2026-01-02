@@ -1,9 +1,11 @@
-.PHONY: build run test migrate-up migrate-down migrate-create clean help sqlc
+.PHONY: build run test migrate-up migrate-down migrate-create clean help sqlc docker-build docker-run
 
 BINARY=letterbox
 BUILD_DIR=bin
 MIGRATIONS_DIR=migrations
 DATABASE_URL ?= postgres://letterbox:letterbox@localhost:5434/letterbox?sslmode=disable
+DOCKER_IMAGE=letterbox
+DOCKER_TAG ?= latest
 
 ## help: Show this help
 help:
@@ -53,3 +55,11 @@ docker-up:
 ## docker-down: Stop containers
 docker-down:
 	docker-compose down
+
+## docker-build: Build Docker image
+docker-build:
+	docker build -t $(DOCKER_IMAGE):$(DOCKER_TAG) .
+
+## docker-run: Run Docker image (requires env vars)
+docker-run:
+	docker run --rm -p 8080:8080 --env-file .env $(DOCKER_IMAGE):$(DOCKER_TAG)
