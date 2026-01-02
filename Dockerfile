@@ -21,7 +21,7 @@ FROM alpine:3.19
 
 WORKDIR /app
 
-# Install ca-certificates for HTTPS and migrate tool
+# Install ca-certificates for HTTPS and tzdata for timezones
 RUN apk add --no-cache ca-certificates tzdata
 
 # Create non-root user
