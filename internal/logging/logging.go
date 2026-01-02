@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"log"
 	"log/slog"
 	"os"
 	"strings"
@@ -23,9 +24,14 @@ func Setup(cfg Config) *slog.Logger {
 
 	var handler slog.Handler
 
-	if strings.ToLower(cfg.Format) == "text" {
+	format := strings.ToLower(cfg.Format)
+	if format == "text" {
 		handler = slog.NewTextHandler(os.Stdout, opts)
 	} else {
+		if format != "" && format != "json" {
+			log.Printf("WARNING: unrecognized log format %q, defaulting to json", cfg.Format)
+		}
+
 		handler = slog.NewJSONHandler(os.Stdout, opts)
 	}
 
@@ -36,18 +42,20 @@ func Setup(cfg Config) *slog.Logger {
 }
 
 // parseLevel converts a string level to slog.Level.
-// Defaults to Info if unrecognized.
+// Warns and defaults to Info if unrecognized.
 func parseLevel(level string) slog.Level {
 	switch strings.ToLower(level) {
 	case "debug":
 		return slog.LevelDebug
-	case "info":
+	case "info", "":
 		return slog.LevelInfo
 	case "warn", "warning":
 		return slog.LevelWarn
 	case "error":
 		return slog.LevelError
 	default:
+		log.Printf("WARNING: unrecognized log level %q, defaulting to info", level)
+
 		return slog.LevelInfo
 	}
 }

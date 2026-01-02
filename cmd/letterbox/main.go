@@ -123,8 +123,11 @@ func main() {
 	coordinator.Start()
 	webhookWorker.Start()
 
+	// Create cancellable context for startup tasks
+	startupCtx, startupCancel := context.WithCancel(context.Background())
+
 	// Load existing accounts into sync coordinator
-	go loadExistingAccounts(ctx, accountRepo, coordinator)
+	go loadExistingAccounts(startupCtx, accountRepo, coordinator)
 
 	// Start HTTP server in goroutine
 	go func() {
@@ -141,6 +144,9 @@ func main() {
 	sig := <-quit
 
 	slog.Info("shutdown signal received", "signal", sig.String())
+
+	// Cancel any in-progress startup tasks
+	startupCancel()
 
 	// Create shutdown context with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
@@ -182,6 +188,15 @@ func loadExistingAccounts(ctx context.Context, accountRepo *repository.AccountRe
 	}
 
 	for _, account := range accounts {
+		// Check for context cancellation (shutdown)
+		select {
+		case <-ctx.Done():
+			slog.Debug("account loading cancelled", "remaining", len(accounts))
+
+			return
+		default:
+		}
+
 		if err := coordinator.AddAccount(ctx, account.ID); err != nil {
 			slog.Error("failed to add account to sync",
 				"account_id", account.ID,

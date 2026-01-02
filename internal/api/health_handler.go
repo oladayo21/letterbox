@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 )
@@ -48,6 +49,7 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	// Check database
 	if err := h.db.Ping(ctx); err != nil {
+		slog.Warn("health check failed", "component", "database", "error", err)
 		checks["database"] = err.Error()
 		allHealthy = false
 	} else {
@@ -56,6 +58,7 @@ func (h *HealthHandler) Ready(w http.ResponseWriter, r *http.Request) {
 
 	// Check S3
 	if err := h.s3.Ping(ctx); err != nil {
+		slog.Warn("health check failed", "component", "s3", "error", err)
 		checks["s3"] = err.Error()
 		allHealthy = false
 	} else {
