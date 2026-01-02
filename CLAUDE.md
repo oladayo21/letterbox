@@ -148,3 +148,4 @@ Format:
 4. Never merge with unresolved PR comments
 5. Update memory after each session
 6. Follow story dependencies (see STORIES.md dependency graph)
+7. **Always commit and create PR when story is complete** - don't wait for user to ask
