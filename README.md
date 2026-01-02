@@ -16,46 +16,177 @@ IMAP-to-REST facade with webhook support. Expose email accounts via REST API wit
 
 ## Architecture
 
+```mermaid
+graph TB
+    subgraph Clients
+        APP[Client Apps]
+    end
+
+    subgraph letterbox[Letterbox Service]
+        subgraph API[API Layer]
+            REST[REST API<br/>Chi Router]
+            AUTH[API Key Auth]
+        end
+
+        subgraph Handlers
+            AH[Account Handler]
+            FH[Folder Handler]
+            MH[Message Handler]
+            WH[Webhook Handler]
+            SH[Search Handler]
+        end
+
+        subgraph Sync[Sync System]
+            COORD[Coordinator]
+            IDLE[IDLE Pool<br/>Real-time]
+            POLL[Poller<br/>60s interval]
+        end
+
+        subgraph Webhook[Webhook System]
+            PROD[Producer<br/>Queue emails]
+            WORK[Worker<br/>Deliver + Retry]
+        end
+
+        subgraph Core[Core Services]
+            ING[Ingester<br/>Fetch → Parse → Store]
+            PARSE[Parser<br/>RFC822 → Structured]
+            IMAPC[IMAP Client]
+        end
+
+        subgraph Data[Data Layer]
+            REPO[Repositories]
+            CRYPT[Crypto<br/>AES-256]
+            S3C[S3 Storage]
+        end
+    end
+
+    subgraph Storage
+        PG[(PostgreSQL<br/>emails, webhooks<br/>queue, FTS)]
+        MINIO[(S3 Compatible<br/>Attachments)]
+    end
+
+    subgraph External
+        IMAP[IMAP Servers<br/>Gmail, Outlook, etc.]
+        WEBHOOK_EP[Webhook Endpoints]
+    end
+
+    APP -->|HTTP + API Key| AUTH
+    AUTH --> REST
+    REST --> AH & FH & MH & WH & SH
+    AH & FH & MH & SH --> REPO
+    MH -->|on-demand fetch| ING
+    WH --> REPO
+
+    COORD --> IDLE & POLL
+    IDLE & POLL <-->|IMAP| IMAP
+    IDLE & POLL -->|new email| COORD
+    COORD --> ING
+    ING --> IMAPC
+    IMAPC --> IMAP
+    ING --> PARSE
+    ING --> REPO
+    ING --> S3C
+
+    COORD -->|on new email| PROD
+    PROD --> PG
+    WORK -->|poll queue| PG
+    WORK -->|POST + HMAC| WEBHOOK_EP
+
+    REPO --> PG
+    REPO --> CRYPT
+    S3C --> MINIO
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Coordinator                              │
-│                                                                  │
-│   AddAccount(id)                                                 │
-│        │                                                         │
-│        ▼                                                         │
-│   Check IDLE capability                                          │
-│        │                                                         │
-│        ├── Yes ──► IdlePool (real-time, persistent connections) │
-│        └── No ───► Poller (checks every 60s)                    │
-│                                                                  │
-│   ┌──────────────┐         ┌──────────────┐                     │
-│   │   IdlePool   │         │    Poller    │                     │
-│   │              │         │              │                     │
-│   │  Account 1 ──┼────┐    │  Account 3 ──┼────┐                │
-│   │  Account 2 ──┼────┤    │  Account 4 ──┼────┤                │
-│   │    (IDLE)    │    │    │  (polling)   │    │                │
-│   └──────────────┘    │    └──────────────┘    │                │
-│                       │                        │                 │
-│                       └───────────┬────────────┘                 │
-│                                   ▼                              │
-│                           handleEvent()                          │
-│                                   │                              │
-│                                   ▼                              │
-│                       FetchUIDsAfter(lastUID)                   │
-│                                   │                              │
-│                                   ▼                              │
-│                       Ingester.IngestEmail()                    │
-│                          │              │                        │
-│                          ▼              ▼                        │
-│                    PostgreSQL     S3 (attachments)              │
-│                                   │                              │
-│                                   ▼                              │
-│                         EventHandler(email)                      │
-│                                   │                              │
-│                                   ▼                              │
-│                           Webhook Delivery                       │
-└─────────────────────────────────────────────────────────────────┘
+
+### Sequence: New Email Arrives
+
+```mermaid
+sequenceDiagram
+    participant IMAP as IMAP Server
+    participant IDLE as IDLE Pool
+    participant COORD as Coordinator
+    participant ING as Ingester
+    participant DB as PostgreSQL
+    participant S3 as S3 Storage
+    participant PROD as Webhook Producer
+    participant WORK as Webhook Worker
+    participant EP as Webhook Endpoint
+
+    IMAP->>IDLE: EXISTS (new message)
+    IDLE->>COORD: IdleEvent{NewMessage}
+    COORD->>IMAP: Fetch UIDs after last known
+    IMAP-->>COORD: [UID 123]
+    
+    COORD->>ING: IngestEmail(account, folder, uid)
+    ING->>IMAP: Fetch raw RFC822
+    IMAP-->>ING: raw bytes
+    ING->>ING: Parse email
+    ING->>S3: Upload attachments
+    ING->>DB: Store email + attachments
+    ING-->>COORD: *domain.Email
+
+    COORD->>PROD: QueueForEmail(email)
+    PROD->>DB: Insert queue items
+
+    loop Worker polling (every 5s)
+        WORK->>DB: GetPendingItems
+        DB-->>WORK: [item]
+        WORK->>EP: POST with HMAC signature
+        alt Success
+            EP-->>WORK: 200 OK
+            WORK->>DB: Mark delivered
+        else Failure
+            EP-->>WORK: Error
+            WORK->>DB: Schedule retry with backoff
+        end
+    end
 ```
+
+### Package Structure
+
+```mermaid
+graph LR
+    subgraph cmd
+        MAIN[main.go]
+    end
+
+    subgraph internal
+        API[api]
+        SYNC[sync]
+        WEBHOOK[webhook]
+        INGEST[ingest]
+        IMAPC[imap]
+        PARSER[parser]
+        REPO[repository]
+        STORAGE[storage]
+        DB[db]
+        CRYPTO[crypto]
+        DOMAIN[domain]
+    end
+
+    MAIN --> API & SYNC & WEBHOOK & INGEST & REPO & STORAGE
+
+    API --> REPO & INGEST & STORAGE & IMAPC
+    SYNC --> IMAPC & INGEST & REPO
+    WEBHOOK --> REPO & STORAGE & DB
+    INGEST --> IMAPC & PARSER & REPO & STORAGE
+    REPO --> DB & CRYPTO & DOMAIN
+    PARSER --> DOMAIN
+```
+
+| Package | Purpose |
+|---------|---------|
+| `cmd/letterbox` | Entry point, wires dependencies |
+| `internal/api` | REST handlers |
+| `internal/sync` | Coordinator + IDLE pool + Poller |
+| `internal/webhook` | Producer (queue) + Worker (deliver) |
+| `internal/ingest` | Fetch → Parse → Store pipeline |
+| `internal/imap` | IMAP client helpers |
+| `internal/parser` | RFC822 email parsing |
+| `internal/repository` | Data access with encryption |
+| `internal/storage` | S3 adapter |
+| `internal/db` | sqlc-generated queries |
+| `internal/crypto` | AES-256 encryption |
+| `internal/domain` | Core types |
 
 ## Features
 

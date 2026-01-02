@@ -7,7 +7,6 @@ import (
 	"github.com/oladayo21/letterbox/internal/ingest"
 	"github.com/oladayo21/letterbox/internal/logging"
 	"github.com/oladayo21/letterbox/internal/repository"
-	"github.com/oladayo21/letterbox/internal/search"
 	"github.com/oladayo21/letterbox/internal/storage"
 )
 
@@ -20,7 +19,6 @@ type RouterConfig struct {
 	WebhookRepo    *repository.WebhookRepository
 	Ingester       *ingest.Ingester
 	S3             *storage.S3Storage
-	SearchSvc      *search.Service
 	DB             HealthChecker
 }
 
@@ -44,7 +42,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 		folderHandler := NewFolderHandler(cfg.AccountRepo)
 		messageHandler := NewMessageHandler(cfg.AccountRepo, cfg.EmailRepo, cfg.AttachmentRepo, cfg.Ingester, cfg.S3)
 		webhookHandler := NewWebhookHandler(cfg.WebhookRepo)
-		searchHandler := NewSearchHandler(cfg.AccountRepo, cfg.SearchSvc)
+		searchHandler := NewSearchHandler(cfg.AccountRepo, cfg.EmailRepo)
 
 		r.Route("/accounts", func(r chi.Router) {
 			r.Post("/", accountHandler.Create)

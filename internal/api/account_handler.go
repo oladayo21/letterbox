@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -82,7 +81,7 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := validate.Struct(req); err != nil {
-		writeError(w, http.StatusBadRequest, formatValidationError(err))
+		writeError(w, http.StatusBadRequest, formatValidationError(err, accountFieldNames))
 
 		return
 	}
@@ -198,7 +197,7 @@ func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-var fieldNames = map[string]string{
+var accountFieldNames = map[string]string{
 	"Name":         "name",
 	"ImapHost":     "imap_host",
 	"ImapPort":     "imap_port",
@@ -208,42 +207,6 @@ var fieldNames = map[string]string{
 	"SmtpPort":     "smtp_port",
 	"SmtpUser":     "smtp_user",
 	"SmtpPassword": "smtp_password",
-}
-
-func formatValidationError(err error) string {
-	var ve validator.ValidationErrors
-
-	if !errors.As(err, &ve) {
-		return "validation failed"
-	}
-
-	var msgs []string
-
-	for _, fe := range ve {
-		field := fieldNames[fe.Field()]
-
-		if field == "" {
-			field = fe.Field()
-		}
-
-		msgs = append(msgs, formatFieldError(field, fe.Tag(), fe.Param()))
-	}
-
-	return strings.Join(msgs, "; ")
-}
-
-func formatFieldError(field, tag, param string) string {
-
-	switch tag {
-	case "required":
-		return field + " is required"
-	case "max":
-		return field + " must be " + param + " characters or less"
-	case "min":
-		return field + " must be at least " + param
-	default:
-		return field + " is invalid"
-	}
 }
 
 func classifyImapError(err error) string {

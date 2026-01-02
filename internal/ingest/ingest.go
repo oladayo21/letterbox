@@ -123,8 +123,8 @@ func (i *Ingester) IngestEmail(ctx context.Context, accountID uuid.UUID, folder 
 		Subject:    parsed.Subject,
 		FromEmail:  parsed.From.Email,
 		FromName:   parsed.From.Name,
-		To:         convertAddresses(parsed.To),
-		CC:         convertAddresses(parsed.CC),
+		To:         parsed.To,
+		CC:         parsed.CC,
 		Date:       parsed.Date,
 		ParsedText: parsed.Text,
 		ParsedHTML: parsed.HTML,
@@ -176,18 +176,4 @@ func (i *Ingester) IngestEmail(ctx context.Context, accountID uuid.UUID, folder 
 	email.Attachments = attachments
 
 	return email, nil
-}
-
-// convertAddresses converts parser addresses to domain addresses.
-func convertAddresses(addrs []parser.EmailAddress) []domain.EmailAddress {
-	result := make([]domain.EmailAddress, len(addrs))
-
-	for i, addr := range addrs {
-		result[i] = domain.EmailAddress{
-			Name:  addr.Name,
-			Email: addr.Email,
-		}
-	}
-
-	return result
 }

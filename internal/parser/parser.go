@@ -6,13 +6,9 @@ import (
 	"time"
 
 	"github.com/jhillyerd/enmime/v2"
-)
 
-// EmailAddress represents a parsed email address.
-type EmailAddress struct {
-	Name  string
-	Email string
-}
+	"github.com/oladayo21/letterbox/internal/domain"
+)
 
 // Attachment represents a parsed email attachment or inline image.
 type Attachment struct {
@@ -28,9 +24,9 @@ type Attachment struct {
 type ParsedEmail struct {
 	MessageID   string
 	Subject     string
-	From        EmailAddress
-	To          []EmailAddress
-	CC          []EmailAddress
+	From        domain.EmailAddress
+	To          []domain.EmailAddress
+	CC          []domain.EmailAddress
 	Date        time.Time
 	Text        string
 	HTML        string
@@ -55,8 +51,8 @@ func envToEmail(env *enmime.Envelope) *ParsedEmail {
 		Subject:     env.GetHeader("Subject"),
 		Text:        env.Text,
 		HTML:        env.HTML,
-		To:          []EmailAddress{},
-		CC:          []EmailAddress{},
+		To:          []domain.EmailAddress{},
+		CC:          []domain.EmailAddress{},
 		Attachments: []Attachment{},
 		Errors:      []string{},
 	}
@@ -70,7 +66,7 @@ func envToEmail(env *enmime.Envelope) *ParsedEmail {
 
 	// Parse From address
 	if fromList, err := env.AddressList("From"); err == nil && len(fromList) > 0 {
-		result.From = EmailAddress{
+		result.From = domain.EmailAddress{
 			Name:  fromList[0].Name,
 			Email: fromList[0].Address,
 		}
@@ -82,7 +78,7 @@ func envToEmail(env *enmime.Envelope) *ParsedEmail {
 	if toList, err := env.AddressList("To"); err == nil {
 
 		for _, addr := range toList {
-			result.To = append(result.To, EmailAddress{
+			result.To = append(result.To, domain.EmailAddress{
 				Name:  addr.Name,
 				Email: addr.Address,
 			})
@@ -95,7 +91,7 @@ func envToEmail(env *enmime.Envelope) *ParsedEmail {
 	if ccList, err := env.AddressList("Cc"); err == nil {
 
 		for _, addr := range ccList {
-			result.CC = append(result.CC, EmailAddress{
+			result.CC = append(result.CC, domain.EmailAddress{
 				Name:  addr.Name,
 				Email: addr.Address,
 			})

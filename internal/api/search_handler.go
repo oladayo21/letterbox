@@ -4,23 +4,23 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/oladayo21/letterbox/internal/domain"
 	"github.com/oladayo21/letterbox/internal/repository"
-	"github.com/oladayo21/letterbox/internal/search"
 )
 
 type SearchHandler struct {
 	accountRepo *repository.AccountRepository
-	searchSvc   *search.Service
+	emailRepo   *repository.EmailRepository
 }
 
-func NewSearchHandler(accountRepo *repository.AccountRepository, searchSvc *search.Service) *SearchHandler {
+func NewSearchHandler(accountRepo *repository.AccountRepository, emailRepo *repository.EmailRepository) *SearchHandler {
 	return &SearchHandler{
 		accountRepo: accountRepo,
-		searchSvc:   searchSvc,
+		emailRepo:   emailRepo,
 	}
 }
 
@@ -32,7 +32,7 @@ type searchResponse struct {
 }
 
 func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("q")
+	query := strings.TrimSpace(r.URL.Query().Get("q"))
 
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "query parameter 'q' is required")
@@ -74,7 +74,7 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	folder := r.URL.Query().Get("folder")
 
-	limit, offset, err := parseSearchParams(r)
+	limit, offset, err := parsePaginationParams(r)
 
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -82,13 +82,15 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.searchSvc.Search(r.Context(), accountID, query, folder, limit, offset)
-
-	if errors.Is(err, search.ErrEmptyQuery) {
-		writeError(w, http.StatusBadRequest, "search query cannot be empty")
-
-		return
+	filter := domain.SearchEmailsFilter{
+		AccountID: accountID,
+		Query:     query,
+		Folder:    folder,
+		Limit:     limit,
+		Offset:    offset,
 	}
+
+	emails, err := h.emailRepo.Search(r.Context(), filter)
 
 	if errors.Is(err, repository.ErrInvalidSearchQuery) {
 		writeError(w, http.StatusBadRequest, "invalid search query syntax")
@@ -109,43 +111,29 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages := make([]messageListItem, len(result.Emails))
+	total, err := h.emailRepo.CountSearch(r.Context(), accountID, query, folder)
 
-	for i, e := range result.Emails {
+	if err != nil {
+		slog.Error("count search failed",
+			"account_id", accountID,
+			"query", query,
+			"folder", folder,
+			"error", err)
+		writeError(w, http.StatusInternalServerError, "search failed")
+
+		return
+	}
+
+	messages := make([]messageListItem, len(emails))
+
+	for i, e := range emails {
 		messages[i] = toMessageListItem(&e)
 	}
 
 	writeJSON(w, http.StatusOK, searchResponse{
 		Messages: messages,
-		Total:    result.Total,
-		Limit:    result.Limit,
-		Offset:   result.Offset,
+		Total:    total,
+		Limit:    limit,
+		Offset:   offset,
 	})
-}
-
-func parseSearchParams(r *http.Request) (limit, offset int, err error) {
-	limit = defaultLimit
-	offset = 0
-
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		limit, err = strconv.Atoi(limitStr)
-
-		if err != nil || limit < 1 {
-			return 0, 0, errors.New("invalid limit")
-		}
-
-		if limit > maxLimit {
-			limit = maxLimit
-		}
-	}
-
-	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		offset, err = strconv.Atoi(offsetStr)
-
-		if err != nil || offset < 0 {
-			return 0, 0, errors.New("invalid offset")
-		}
-	}
-
-	return limit, offset, nil
 }

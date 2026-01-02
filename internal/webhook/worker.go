@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/oladayo21/letterbox/internal/db"
@@ -195,8 +194,8 @@ func (w *Worker) processBatch() {
 
 // deliverWebhook attempts to deliver a single webhook.
 func (w *Worker) deliverWebhook(item db.WebhookQueue) {
-	itemID := pgtypeToUUID(item.ID)
-	webhookID := pgtypeToUUID(item.WebhookID)
+	itemID := db.PgtypeToUUID(item.ID)
+	webhookID := db.PgtypeToUUID(item.WebhookID)
 
 	attempts := int32(0)
 
@@ -330,7 +329,7 @@ func (w *Worker) markDelivered(id pgtype.UUID) bool {
 
 	if err != nil {
 		slog.Error("failed to mark webhook as delivered",
-			"queue_id", pgtypeToUUID(id),
+			"queue_id", db.PgtypeToUUID(id),
 			"error", err,
 		)
 
@@ -347,7 +346,7 @@ func (w *Worker) markFailed(id pgtype.UUID) bool {
 
 	if err != nil {
 		slog.Error("failed to mark webhook as failed",
-			"queue_id", pgtypeToUUID(id),
+			"queue_id", db.PgtypeToUUID(id),
 			"error", err,
 		)
 
@@ -374,14 +373,14 @@ func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
 	// Check if max retries exceeded
 	if newAttempts >= w.config.MaxRetries {
 		slog.Error("max retries exceeded, marking as failed",
-			"queue_id", pgtypeToUUID(id),
+			"queue_id", db.PgtypeToUUID(id),
 			"attempts", newAttempts,
 			"max_retries", w.config.MaxRetries,
 		)
 
 		if !w.markFailed(id) {
 			slog.Error("CRITICAL: failed to mark as failed after max retries",
-				"queue_id", pgtypeToUUID(id),
+				"queue_id", db.PgtypeToUUID(id),
 			)
 		}
 
@@ -412,13 +411,13 @@ func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
 
 	if err != nil {
 		slog.Error("failed to schedule retry, marking as failed",
-			"queue_id", pgtypeToUUID(id),
+			"queue_id", db.PgtypeToUUID(id),
 			"error", err,
 		)
 
 		if !w.markFailed(id) {
 			slog.Error("CRITICAL: failed to mark as failed after schedule error",
-				"queue_id", pgtypeToUUID(id),
+				"queue_id", db.PgtypeToUUID(id),
 			)
 		}
 
@@ -426,18 +425,9 @@ func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
 	}
 
 	slog.Info("scheduled webhook retry",
-		"queue_id", pgtypeToUUID(id),
+		"queue_id", db.PgtypeToUUID(id),
 		"attempt", newAttempts,
 		"next_attempt", nextAttempt,
 		"backoff", backoff,
 	)
-}
-
-// pgtypeToUUID converts pgtype.UUID to uuid.UUID.
-func pgtypeToUUID(p pgtype.UUID) uuid.UUID {
-	if !p.Valid {
-		return uuid.Nil
-	}
-
-	return uuid.UUID(p.Bytes)
 }

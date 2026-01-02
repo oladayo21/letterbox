@@ -7,7 +7,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/oladayo21/letterbox/internal/crypto"
 	"github.com/oladayo21/letterbox/internal/db"
@@ -15,9 +14,9 @@ import (
 )
 
 var (
-	ErrAccountNotFound    = errors.New("account not found")
-	ErrInvalidKey         = errors.New("encryption key must be 32 bytes")
-	ErrEmptyImapPassword  = errors.New("imap password is required")
+	ErrAccountNotFound   = errors.New("account not found")
+	ErrInvalidKey        = errors.New("encryption key must be 32 bytes")
+	ErrEmptyImapPassword = errors.New("imap password is required")
 )
 
 type AccountRepository struct {
@@ -162,52 +161,4 @@ func (r *AccountRepository) toAccount(dbAcc db.Account) (*domain.Account, error)
 		SmtpPassword: smtpPassword,
 		CreatedAt:    dbAcc.CreatedAt.Time,
 	}, nil
-}
-
-func uuidToPgtype(id uuid.UUID) pgtype.UUID {
-
-	return pgtype.UUID{Bytes: id, Valid: true}
-}
-
-func pgtypeToUUID(pg pgtype.UUID) uuid.UUID {
-
-	return uuid.UUID(pg.Bytes)
-}
-
-func ptrString(s string) *string {
-
-	if s == "" {
-		return nil
-	}
-
-	return &s
-}
-
-func ptrInt32(i int) *int32 {
-
-	if i == 0 {
-		return nil
-	}
-
-	v := int32(i)
-
-	return &v
-}
-
-func derefString(s *string) string {
-
-	if s == nil {
-		return ""
-	}
-
-	return *s
-}
-
-func derefInt32(i *int32) int {
-
-	if i == nil {
-		return 0
-	}
-
-	return int(*i)
 }
