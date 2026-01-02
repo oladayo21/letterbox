@@ -137,6 +137,74 @@ func FetchRaw(ctx context.Context, host string, port int, user, password, folder
 	return rawBody, nil
 }
 
+// FetchUIDsAfter returns UIDs greater than the given UID in the folder.
+// If afterUID is 0, returns all UIDs in the folder.
+func FetchUIDsAfter(ctx context.Context, host string, port int, user, password, folder string, afterUID uint32) ([]uint32, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
+
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
+		defer cancel()
+	}
+
+	client, err := dial(ctx, addr, host, port)
+
+	if err != nil {
+		return nil, classifyError(err)
+	}
+
+	defer client.Close()
+
+	if err := client.Login(user, password).Wait(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrAuthFailed, err)
+	}
+
+	defer func() { _ = client.Logout().Wait() }()
+
+	selectData, err := client.Select(folder, nil).Wait()
+
+	if err != nil {
+		if isNoSuchMailboxError(err) {
+			return nil, fmt.Errorf("%w: folder %s: %v", ErrFolderNotFound, folder, err)
+		}
+
+		return nil, fmt.Errorf("%w: folder %s: %v", ErrSelectFailed, folder, err)
+	}
+
+	// If folder is empty, return empty slice
+	if selectData.NumMessages == 0 {
+		return []uint32{}, nil
+	}
+
+	// Search for UIDs > afterUID
+	var searchCriteria *imap.SearchCriteria
+
+	if afterUID > 0 {
+		// UID range from afterUID+1 to * (0 means unbounded/max)
+		uidRange := imap.UIDRange{Start: imap.UID(afterUID + 1), Stop: 0}
+		searchCriteria = &imap.SearchCriteria{
+			UID: []imap.UIDSet{{uidRange}},
+		}
+	} else {
+		searchCriteria = &imap.SearchCriteria{} // All messages
+	}
+
+	searchData, err := client.UIDSearch(searchCriteria, nil).Wait()
+
+	if err != nil {
+		return nil, fmt.Errorf("searching UIDs: %w", err)
+	}
+
+	uids := make([]uint32, 0, len(searchData.AllUIDs()))
+
+	for _, uid := range searchData.AllUIDs() {
+		uids = append(uids, uint32(uid))
+	}
+
+	return uids, nil
+}
+
 // ListFolders returns all folders with message counts.
 func ListFolders(ctx context.Context, host string, port int, user, password string) ([]Folder, error) {
 	addr := fmt.Sprintf("%s:%d", host, port)

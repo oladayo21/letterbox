@@ -2,6 +2,49 @@
 
 IMAP-to-REST facade with webhook support. Expose email accounts via REST API with real-time notifications.
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Coordinator                              │
+│                                                                  │
+│   AddAccount(id)                                                 │
+│        │                                                         │
+│        ▼                                                         │
+│   Check IDLE capability                                          │
+│        │                                                         │
+│        ├── Yes ──► IdlePool (real-time, persistent connections) │
+│        └── No ───► Poller (checks every 60s)                    │
+│                                                                  │
+│   ┌──────────────┐         ┌──────────────┐                     │
+│   │   IdlePool   │         │    Poller    │                     │
+│   │              │         │              │                     │
+│   │  Account 1 ──┼────┐    │  Account 3 ──┼────┐                │
+│   │  Account 2 ──┼────┤    │  Account 4 ──┼────┤                │
+│   │    (IDLE)    │    │    │  (polling)   │    │                │
+│   └──────────────┘    │    └──────────────┘    │                │
+│                       │                        │                 │
+│                       └───────────┬────────────┘                 │
+│                                   ▼                              │
+│                           handleEvent()                          │
+│                                   │                              │
+│                                   ▼                              │
+│                       FetchUIDsAfter(lastUID)                   │
+│                                   │                              │
+│                                   ▼                              │
+│                       Ingester.IngestEmail()                    │
+│                          │              │                        │
+│                          ▼              ▼                        │
+│                    PostgreSQL     S3 (attachments)              │
+│                                   │                              │
+│                                   ▼                              │
+│                         EventHandler(email)                      │
+│                                   │                              │
+│                                   ▼                              │
+│                           Webhook Delivery                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
 ## Features
 
 - REST API for reading emails across multiple IMAP accounts
