@@ -63,16 +63,22 @@ func main() {
 	accountRepo, err := repository.NewAccountRepository(queries, cfg.EncryptionKeyBytes())
 
 	if err != nil {
-		log.Fatalf("repository error: %v", err)
+		log.Fatalf("account repository error: %v", err)
 	}
 
 	emailRepo := repository.NewEmailRepository(queries)
 	attachmentRepo := repository.NewAttachmentRepository(queries)
 
+	webhookRepo, err := repository.NewWebhookRepository(queries, cfg.EncryptionKeyBytes())
+
+	if err != nil {
+		log.Fatalf("webhook repository error: %v", err)
+	}
+
 	// Initialize ingester
 	ingester := ingest.NewIngester(accountRepo, emailRepo, attachmentRepo, s3Storage)
 
-	router := api.NewRouter(cfg.APIKey, accountRepo, emailRepo, attachmentRepo, ingester, s3Storage)
+	router := api.NewRouter(cfg.APIKey, accountRepo, emailRepo, attachmentRepo, webhookRepo, ingester, s3Storage)
 
 	slog.Info("letterbox starting", "port", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, router))

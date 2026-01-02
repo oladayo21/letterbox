@@ -14,6 +14,7 @@ func NewRouter(
 	accountRepo *repository.AccountRepository,
 	emailRepo *repository.EmailRepository,
 	attachmentRepo *repository.AttachmentRepository,
+	webhookRepo *repository.WebhookRepository,
 	ingester *ingest.Ingester,
 	s3 *storage.S3Storage,
 ) *chi.Mux {
@@ -26,6 +27,7 @@ func NewRouter(
 	accountHandler := NewAccountHandler(accountRepo)
 	folderHandler := NewFolderHandler(accountRepo)
 	messageHandler := NewMessageHandler(accountRepo, emailRepo, attachmentRepo, ingester, s3)
+	webhookHandler := NewWebhookHandler(webhookRepo)
 
 	r.Route("/accounts", func(r chi.Router) {
 		r.Post("/", accountHandler.Create)
@@ -35,6 +37,12 @@ func NewRouter(
 		r.Get("/{id}/folders", folderHandler.List)
 		r.Get("/{id}/folders/{name}/messages", messageHandler.ListMessages)
 		r.Get("/{id}/messages/{uid}", messageHandler.GetMessage)
+	})
+
+	r.Route("/webhooks", func(r chi.Router) {
+		r.Post("/", webhookHandler.Create)
+		r.Get("/", webhookHandler.List)
+		r.Delete("/{id}", webhookHandler.Delete)
 	})
 
 	return r
