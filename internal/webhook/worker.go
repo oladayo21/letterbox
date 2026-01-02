@@ -1,0 +1,293 @@
+package webhook
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/oladayo21/letterbox/internal/db"
+	"github.com/oladayo21/letterbox/internal/repository"
+)
+
+const (
+	// DefaultPollInterval is the default interval between queue polls.
+	DefaultPollInterval = 5 * time.Second
+
+	// DefaultBatchSize is the default number of items to fetch per poll.
+	DefaultBatchSize = 10
+
+	// DefaultHTTPTimeout is the default timeout for webhook HTTP requests.
+	DefaultHTTPTimeout = 30 * time.Second
+
+	// SignatureHeader is the header name for the webhook signature.
+	SignatureHeader = "X-Letterbox-Signature"
+
+	// TimestampHeader is the header name for the webhook timestamp.
+	TimestampHeader = "X-Letterbox-Timestamp"
+)
+
+// WorkerConfig contains configuration for the webhook worker.
+type WorkerConfig struct {
+	PollInterval time.Duration
+	BatchSize    int32
+	HTTPTimeout  time.Duration
+}
+
+// Worker polls the webhook queue and delivers payloads.
+type Worker struct {
+	queries     *db.Queries
+	webhookRepo *repository.WebhookRepository
+	httpClient  *http.Client
+	config      WorkerConfig
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	mu     sync.Mutex
+	closed bool
+}
+
+// NewWorker creates a new webhook delivery worker.
+func NewWorker(
+	queries *db.Queries,
+	webhookRepo *repository.WebhookRepository,
+	config WorkerConfig,
+) *Worker {
+	if config.PollInterval == 0 {
+		config.PollInterval = DefaultPollInterval
+	}
+
+	if config.BatchSize == 0 {
+		config.BatchSize = DefaultBatchSize
+	}
+
+	if config.HTTPTimeout == 0 {
+		config.HTTPTimeout = DefaultHTTPTimeout
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &Worker{
+		queries:     queries,
+		webhookRepo: webhookRepo,
+		httpClient: &http.Client{
+			Timeout: config.HTTPTimeout,
+		},
+		config: config,
+		ctx:    ctx,
+		cancel: cancel,
+	}
+}
+
+// Start begins the worker polling loop.
+func (w *Worker) Start() {
+	w.wg.Add(1)
+
+	go w.run()
+
+	slog.Info("webhook worker started",
+		"poll_interval", w.config.PollInterval,
+		"batch_size", w.config.BatchSize,
+	)
+}
+
+// Stop gracefully shuts down the worker.
+func (w *Worker) Stop() error {
+	w.mu.Lock()
+
+	if w.closed {
+		w.mu.Unlock()
+
+		return nil
+	}
+
+	w.closed = true
+	w.mu.Unlock()
+
+	w.cancel()
+	w.wg.Wait()
+
+	slog.Info("webhook worker stopped")
+
+	return nil
+}
+
+// run is the main polling loop.
+func (w *Worker) run() {
+	defer w.wg.Done()
+
+	ticker := time.NewTicker(w.config.PollInterval)
+	defer ticker.Stop()
+
+	// Process immediately on start
+	w.processBatch()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			w.processBatch()
+		}
+	}
+}
+
+// processBatch fetches and processes a batch of pending webhook deliveries.
+func (w *Worker) processBatch() {
+	items, err := w.queries.GetPendingWebhookQueueItems(w.ctx, w.config.BatchSize)
+
+	if err != nil {
+		slog.Error("failed to fetch pending webhooks", "error", err)
+
+		return
+	}
+
+	if len(items) == 0 {
+		return
+	}
+
+	slog.Debug("processing webhook batch", "count", len(items))
+
+	for _, item := range items {
+		// Check for shutdown
+		select {
+		case <-w.ctx.Done():
+			return
+		default:
+		}
+
+		w.deliverWebhook(item)
+	}
+}
+
+// deliverWebhook attempts to deliver a single webhook.
+func (w *Worker) deliverWebhook(item db.WebhookQueue) {
+	itemID := pgtypeToUUID(item.ID)
+	webhookID := pgtypeToUUID(item.WebhookID)
+
+	// Get webhook details (URL and secret)
+	webhook, err := w.webhookRepo.Get(w.ctx, webhookID)
+
+	if err != nil {
+		slog.Error("failed to get webhook for delivery",
+			"queue_id", itemID,
+			"webhook_id", webhookID,
+			"error", err,
+		)
+
+		w.markFailed(item.ID)
+
+		return
+	}
+
+	// Build and send request
+	err = w.sendWebhook(webhook.URL, webhook.Secret, item.Payload)
+
+	if err != nil {
+		slog.Error("webhook delivery failed",
+			"queue_id", itemID,
+			"webhook_id", webhookID,
+			"url", webhook.URL,
+			"error", err,
+		)
+
+		w.markFailed(item.ID)
+
+		return
+	}
+
+	// Success
+	w.markDelivered(item.ID)
+
+	slog.Info("webhook delivered",
+		"queue_id", itemID,
+		"webhook_id", webhookID,
+		"url", webhook.URL,
+	)
+}
+
+// sendWebhook sends the HTTP POST request with signature.
+func (w *Worker) sendWebhook(url, secret string, payload []byte) error {
+	timestamp := time.Now().Unix()
+	signature := computeSignature(payload, secret, timestamp)
+
+	req, err := http.NewRequestWithContext(w.ctx, http.MethodPost, url, bytes.NewReader(payload))
+
+	if err != nil {
+		return fmt.Errorf("creating request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(TimestampHeader, fmt.Sprintf("%d", timestamp))
+	req.Header.Set(SignatureHeader, signature)
+
+	resp, err := w.httpClient.Do(req)
+
+	if err != nil {
+		return fmt.Errorf("sending request: %w", err)
+	}
+
+	defer resp.Body.Close()
+
+	// Consider 2xx as success
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+// computeSignature generates HMAC-SHA256 signature for webhook verification.
+// Format: HMAC-SHA256(timestamp.payload, secret)
+func computeSignature(payload []byte, secret string, timestamp int64) string {
+	message := fmt.Sprintf("%d.%s", timestamp, payload)
+
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(message))
+
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// markDelivered marks a queue item as successfully delivered.
+func (w *Worker) markDelivered(id pgtype.UUID) {
+	_, err := w.queries.MarkWebhookQueueDelivered(w.ctx, id)
+
+	if err != nil {
+		slog.Error("failed to mark webhook as delivered",
+			"queue_id", pgtypeToUUID(id),
+			"error", err,
+		)
+	}
+}
+
+// markFailed marks a queue item as failed.
+func (w *Worker) markFailed(id pgtype.UUID) {
+	_, err := w.queries.MarkWebhookQueueFailed(w.ctx, id)
+
+	if err != nil {
+		slog.Error("failed to mark webhook as failed",
+			"queue_id", pgtypeToUUID(id),
+			"error", err,
+		)
+	}
+}
+
+// pgtypeToUUID converts pgtype.UUID to uuid.UUID.
+func pgtypeToUUID(p pgtype.UUID) uuid.UUID {
+	if !p.Valid {
+		return uuid.Nil
+	}
+
+	return uuid.UUID(p.Bytes)
+}
