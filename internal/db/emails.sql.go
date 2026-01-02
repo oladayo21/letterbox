@@ -227,6 +227,7 @@ const listEmails = `-- name: ListEmails :many
 SELECT id, account_id, uid, message_id, folder, subject, from_email, from_name, date, parsed_text, parsed_html, raw, flags, deleted_upstream, search_vector, created_at, to_recipients, cc_recipients FROM emails
 WHERE account_id = $1
   AND folder = $2
+  AND deleted_upstream = false
   AND ($5::timestamptz IS NULL OR date < $5)
   AND ($6::timestamptz IS NULL OR date > $6)
 ORDER BY date DESC

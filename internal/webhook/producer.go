@@ -18,7 +18,8 @@ import (
 
 const (
 	// PresignedURLExpiry is how long presigned URLs are valid for.
-	PresignedURLExpiry = 24 * time.Hour
+	// Using 1 hour to match API expiry and limit exposure if URL leaks.
+	PresignedURLExpiry = 1 * time.Hour
 )
 
 // WebhookPayload is the JSON structure sent to webhook endpoints.
