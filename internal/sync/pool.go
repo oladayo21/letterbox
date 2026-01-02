@@ -239,6 +239,16 @@ func (p *IdlePool) runAccount(entry *accountEntry) {
 		conn, err := NewIdleConnection(p.ctx, entry.config)
 
 		if err != nil {
+			// Non-retryable error - exit goroutine
+			if errors.Is(err, ErrIdleNotSupported) {
+				slog.Warn("account does not support IDLE, giving up",
+					"account_id", entry.config.AccountID,
+					"error", err,
+				)
+
+				return
+			}
+
 			p.handleConnectionError(entry, err)
 
 			select {
@@ -276,10 +286,16 @@ func (p *IdlePool) forwardEvents(entry *accountEntry, conn *IdleConnection) {
 	for {
 		select {
 		case <-entry.stopCh:
+			slog.Debug("stopping event forwarding - account removed",
+				"account_id", entry.config.AccountID,
+			)
 			conn.Close()
 
 			return
 		case <-p.ctx.Done():
+			slog.Debug("stopping event forwarding - pool closing",
+				"account_id", entry.config.AccountID,
+			)
 			conn.Close()
 
 			return
@@ -288,6 +304,7 @@ func (p *IdlePool) forwardEvents(entry *accountEntry, conn *IdleConnection) {
 				slog.Warn("IDLE connection closed unexpectedly",
 					"account_id", entry.config.AccountID,
 				)
+				conn.Close()
 
 				return
 			}
@@ -307,6 +324,7 @@ func (p *IdlePool) forwardEvents(entry *accountEntry, conn *IdleConnection) {
 				slog.Warn("pool event channel full, dropping event",
 					"account_id", entry.config.AccountID,
 					"type", event.Type.String(),
+					"folder", event.Folder,
 				)
 			}
 		}
@@ -314,6 +332,7 @@ func (p *IdlePool) forwardEvents(entry *accountEntry, conn *IdleConnection) {
 }
 
 // handleConnectionError logs the error and updates backoff state.
+// Note: Non-retryable errors (ErrIdleNotSupported) should be handled by caller before this.
 func (p *IdlePool) handleConnectionError(entry *accountEntry, err error) {
 	p.mu.Lock()
 	entry.retryCount++
@@ -325,15 +344,6 @@ func (p *IdlePool) handleConnectionError(entry *accountEntry, err error) {
 	}
 
 	p.mu.Unlock()
-
-	if errors.Is(err, ErrIdleNotSupported) {
-		slog.Warn("account does not support IDLE, will not retry",
-			"account_id", entry.config.AccountID,
-			"error", err,
-		)
-
-		return
-	}
 
 	slog.Warn("IDLE connection failed, will retry",
 		"account_id", entry.config.AccountID,

@@ -119,6 +119,10 @@ func NewIdleConnection(ctx context.Context, config IdleConfig) (*IdleConnection,
 }
 
 func (c IdleConfig) validate() error {
+	if c.AccountID == "" {
+		return errors.New("account_id is required")
+	}
+
 	if c.Host == "" {
 		return errors.New("host is required")
 	}
