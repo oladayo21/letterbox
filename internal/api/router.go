@@ -11,45 +11,59 @@ import (
 	"github.com/oladayo21/letterbox/internal/storage"
 )
 
-func NewRouter(
-	apiKey string,
-	accountRepo *repository.AccountRepository,
-	emailRepo *repository.EmailRepository,
-	attachmentRepo *repository.AttachmentRepository,
-	webhookRepo *repository.WebhookRepository,
-	ingester *ingest.Ingester,
-	s3 *storage.S3Storage,
-	searchSvc *search.Service,
-) *chi.Mux {
+// RouterConfig contains dependencies for the router.
+type RouterConfig struct {
+	APIKey         string
+	AccountRepo    *repository.AccountRepository
+	EmailRepo      *repository.EmailRepository
+	AttachmentRepo *repository.AttachmentRepository
+	WebhookRepo    *repository.WebhookRepository
+	Ingester       *ingest.Ingester
+	S3             *storage.S3Storage
+	SearchSvc      *search.Service
+	DB             HealthChecker
+}
+
+func NewRouter(cfg RouterConfig) *chi.Mux {
 	r := chi.NewRouter()
 
+	// Global middleware
 	r.Use(logging.RequestLogger)
 	r.Use(middleware.Recoverer)
-	r.Use(APIKeyAuth(apiKey))
 
-	accountHandler := NewAccountHandler(accountRepo)
-	folderHandler := NewFolderHandler(accountRepo)
-	messageHandler := NewMessageHandler(accountRepo, emailRepo, attachmentRepo, ingester, s3)
-	webhookHandler := NewWebhookHandler(webhookRepo)
-	searchHandler := NewSearchHandler(accountRepo, searchSvc)
+	// Health endpoints (unauthenticated)
+	healthHandler := NewHealthHandler(cfg.DB, cfg.S3)
+	r.Get("/health", healthHandler.Health)
+	r.Get("/ready", healthHandler.Ready)
 
-	r.Route("/accounts", func(r chi.Router) {
-		r.Post("/", accountHandler.Create)
-		r.Get("/", accountHandler.List)
-		r.Get("/{id}", accountHandler.Get)
-		r.Delete("/{id}", accountHandler.Delete)
-		r.Get("/{id}/folders", folderHandler.List)
-		r.Get("/{id}/folders/{name}/messages", messageHandler.ListMessages)
-		r.Get("/{id}/messages/{uid}", messageHandler.GetMessage)
+	// Protected routes
+	r.Group(func(r chi.Router) {
+		r.Use(APIKeyAuth(cfg.APIKey))
+
+		accountHandler := NewAccountHandler(cfg.AccountRepo)
+		folderHandler := NewFolderHandler(cfg.AccountRepo)
+		messageHandler := NewMessageHandler(cfg.AccountRepo, cfg.EmailRepo, cfg.AttachmentRepo, cfg.Ingester, cfg.S3)
+		webhookHandler := NewWebhookHandler(cfg.WebhookRepo)
+		searchHandler := NewSearchHandler(cfg.AccountRepo, cfg.SearchSvc)
+
+		r.Route("/accounts", func(r chi.Router) {
+			r.Post("/", accountHandler.Create)
+			r.Get("/", accountHandler.List)
+			r.Get("/{id}", accountHandler.Get)
+			r.Delete("/{id}", accountHandler.Delete)
+			r.Get("/{id}/folders", folderHandler.List)
+			r.Get("/{id}/folders/{name}/messages", messageHandler.ListMessages)
+			r.Get("/{id}/messages/{uid}", messageHandler.GetMessage)
+		})
+
+		r.Route("/webhooks", func(r chi.Router) {
+			r.Post("/", webhookHandler.Create)
+			r.Get("/", webhookHandler.List)
+			r.Delete("/{id}", webhookHandler.Delete)
+		})
+
+		r.Get("/search", searchHandler.Search)
 	})
-
-	r.Route("/webhooks", func(r chi.Router) {
-		r.Post("/", webhookHandler.Create)
-		r.Get("/", webhookHandler.List)
-		r.Delete("/{id}", webhookHandler.Delete)
-	})
-
-	r.Get("/search", searchHandler.Search)
 
 	return r
 }

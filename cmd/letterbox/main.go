@@ -84,7 +84,17 @@ func main() {
 	// Initialize search service
 	searchSvc := search.NewService(emailRepo)
 
-	router := api.NewRouter(cfg.APIKey, accountRepo, emailRepo, attachmentRepo, webhookRepo, ingester, s3Storage, searchSvc)
+	router := api.NewRouter(api.RouterConfig{
+		APIKey:         cfg.APIKey,
+		AccountRepo:    accountRepo,
+		EmailRepo:      emailRepo,
+		AttachmentRepo: attachmentRepo,
+		WebhookRepo:    webhookRepo,
+		Ingester:       ingester,
+		S3:             s3Storage,
+		SearchSvc:      searchSvc,
+		DB:             pool,
+	})
 
 	slog.Info("letterbox starting", "port", cfg.Port)
 	log.Fatal(http.ListenAndServe(":"+cfg.Port, router))
