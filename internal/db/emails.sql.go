@@ -28,6 +28,27 @@ func (q *Queries) CountEmailsInFolder(ctx context.Context, arg CountEmailsInFold
 	return count, err
 }
 
+const countSearchEmails = `-- name: CountSearchEmails :one
+SELECT COUNT(*) FROM emails
+WHERE account_id = $1
+  AND deleted_upstream = false
+  AND search_vector @@ websearch_to_tsquery('english', $2)
+  AND ($3::text IS NULL OR folder = $3)
+`
+
+type CountSearchEmailsParams struct {
+	AccountID          pgtype.UUID `json:"account_id"`
+	WebsearchToTsquery string      `json:"websearch_to_tsquery"`
+	Folder             *string     `json:"folder"`
+}
+
+func (q *Queries) CountSearchEmails(ctx context.Context, arg CountSearchEmailsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countSearchEmails, arg.AccountID, arg.WebsearchToTsquery, arg.Folder)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const emailExistsByMessageID = `-- name: EmailExistsByMessageID :one
 SELECT EXISTS(
     SELECT 1 FROM emails
@@ -277,6 +298,69 @@ func (q *Queries) MarkEmailDeletedUpstream(ctx context.Context, id pgtype.UUID) 
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const searchEmails = `-- name: SearchEmails :many
+SELECT id, account_id, uid, message_id, folder, subject, from_email, from_name, date, parsed_text, parsed_html, raw, flags, deleted_upstream, search_vector, created_at, to_recipients, cc_recipients FROM emails
+WHERE account_id = $1
+  AND deleted_upstream = false
+  AND search_vector @@ websearch_to_tsquery('english', $2)
+  AND ($5::text IS NULL OR folder = $5)
+ORDER BY date DESC
+LIMIT $3 OFFSET $4
+`
+
+type SearchEmailsParams struct {
+	AccountID          pgtype.UUID `json:"account_id"`
+	WebsearchToTsquery string      `json:"websearch_to_tsquery"`
+	Limit              int32       `json:"limit"`
+	Offset             int32       `json:"offset"`
+	Folder             *string     `json:"folder"`
+}
+
+func (q *Queries) SearchEmails(ctx context.Context, arg SearchEmailsParams) ([]Email, error) {
+	rows, err := q.db.Query(ctx, searchEmails,
+		arg.AccountID,
+		arg.WebsearchToTsquery,
+		arg.Limit,
+		arg.Offset,
+		arg.Folder,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Email{}
+	for rows.Next() {
+		var i Email
+		if err := rows.Scan(
+			&i.ID,
+			&i.AccountID,
+			&i.Uid,
+			&i.MessageID,
+			&i.Folder,
+			&i.Subject,
+			&i.FromEmail,
+			&i.FromName,
+			&i.Date,
+			&i.ParsedText,
+			&i.ParsedHtml,
+			&i.Raw,
+			&i.Flags,
+			&i.DeletedUpstream,
+			&i.SearchVector,
+			&i.CreatedAt,
+			&i.ToRecipients,
+			&i.CcRecipients,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateEmailFlags = `-- name: UpdateEmailFlags :execrows
