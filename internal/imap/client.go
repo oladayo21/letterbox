@@ -267,6 +267,25 @@ func ListFolders(ctx context.Context, host string, port int, user, password stri
 	return folders, nil
 }
 
+// Dial connects to an IMAP server with TLS (implicit on port 993, STARTTLS otherwise).
+// The opts parameter can be nil for simple connections.
+func Dial(ctx context.Context, host string, port int, opts *imapclient.Options) (*imapclient.Client, error) {
+	addr := fmt.Sprintf("%s:%d", host, port)
+	dialer := &net.Dialer{}
+
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if port == 993 {
+		return dialImplicitTLS(ctx, conn, host, opts)
+	}
+
+	return dialStartTLS(conn, host, opts)
+}
+
 func dial(ctx context.Context, addr, host string, port int) (*imapclient.Client, error) {
 	dialer := &net.Dialer{}
 
@@ -277,13 +296,13 @@ func dial(ctx context.Context, addr, host string, port int) (*imapclient.Client,
 	}
 
 	if port == 993 {
-		return dialImplicitTLS(ctx, conn, host)
+		return dialImplicitTLS(ctx, conn, host, nil)
 	}
 
-	return dialStartTLS(conn, host)
+	return dialStartTLS(conn, host, nil)
 }
 
-func dialImplicitTLS(ctx context.Context, conn net.Conn, host string) (*imapclient.Client, error) {
+func dialImplicitTLS(ctx context.Context, conn net.Conn, host string, opts *imapclient.Options) (*imapclient.Client, error) {
 	tlsConfig := &tls.Config{ServerName: host}
 	tlsConn := tls.Client(conn, tlsConfig)
 
@@ -293,13 +312,21 @@ func dialImplicitTLS(ctx context.Context, conn net.Conn, host string) (*imapclie
 		return nil, err
 	}
 
-	return imapclient.New(tlsConn, nil), nil
+	if opts == nil {
+		opts = &imapclient.Options{}
+	}
+
+	opts.TLSConfig = tlsConfig
+
+	return imapclient.New(tlsConn, opts), nil
 }
 
-func dialStartTLS(conn net.Conn, host string) (*imapclient.Client, error) {
-	opts := &imapclient.Options{
-		TLSConfig: &tls.Config{ServerName: host},
+func dialStartTLS(conn net.Conn, host string, opts *imapclient.Options) (*imapclient.Client, error) {
+	if opts == nil {
+		opts = &imapclient.Options{}
 	}
+
+	opts.TLSConfig = &tls.Config{ServerName: host}
 
 	client, err := imapclient.NewStartTLS(conn, opts)
 

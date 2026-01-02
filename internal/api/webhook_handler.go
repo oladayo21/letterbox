@@ -5,11 +5,9 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-playground/validator/v10"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -61,7 +59,7 @@ func (h *WebhookHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := validate.Struct(req); err != nil {
-		writeError(w, http.StatusBadRequest, formatWebhookValidationError(err))
+		writeError(w, http.StatusBadRequest, formatValidationError(err, webhookFieldNames))
 
 		return
 	}
@@ -170,44 +168,4 @@ var webhookFieldNames = map[string]string{
 	"AccountID": "account_id",
 	"URL":       "url",
 	"Secret":    "secret",
-}
-
-func formatWebhookValidationError(err error) string {
-	var ve validator.ValidationErrors
-
-	if !errors.As(err, &ve) {
-		return "validation failed"
-	}
-
-	var msgs []string
-
-	for _, fe := range ve {
-		field := webhookFieldNames[fe.Field()]
-
-		if field == "" {
-			field = fe.Field()
-		}
-
-		msgs = append(msgs, formatWebhookFieldError(field, fe.Tag(), fe.Param()))
-	}
-
-	return strings.Join(msgs, "; ")
-}
-
-func formatWebhookFieldError(field, tag, param string) string {
-
-	switch tag {
-	case "required":
-		return field + " is required"
-	case "uuid":
-		return field + " must be a valid UUID"
-	case "url":
-		return field + " must be a valid URL"
-	case "max":
-		return field + " must be " + param + " characters or less"
-	case "min":
-		return field + " must be at least " + param + " characters"
-	default:
-		return field + " is invalid"
-	}
 }

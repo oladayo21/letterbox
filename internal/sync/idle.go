@@ -2,11 +2,9 @@ package sync
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	gosync "sync"
 	"time"
 
@@ -206,14 +204,14 @@ func (ic *IdleConnection) connect(ctx context.Context) error {
 		defer cancel()
 	}
 
-	addr := fmt.Sprintf("%s:%d", ic.config.Host, ic.config.Port)
-
-	handler := &imapclient.UnilateralDataHandler{
-		Mailbox: ic.handleMailboxUpdate,
-		Expunge: ic.handleExpunge,
+	opts := &imapclient.Options{
+		UnilateralDataHandler: &imapclient.UnilateralDataHandler{
+			Mailbox: ic.handleMailboxUpdate,
+			Expunge: ic.handleExpunge,
+		},
 	}
 
-	client, err := ic.dial(ctx, addr, handler)
+	client, err := letterboximap.Dial(ctx, ic.config.Host, ic.config.Port, opts)
 
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrConnectionFailed, err)
@@ -270,55 +268,6 @@ func (ic *IdleConnection) connect(ctx context.Context) error {
 	)
 
 	return nil
-}
-
-func (ic *IdleConnection) dial(ctx context.Context, addr string, handler *imapclient.UnilateralDataHandler) (*imapclient.Client, error) {
-	dialer := &net.Dialer{}
-
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-
-	if err != nil {
-		return nil, err
-	}
-
-	opts := &imapclient.Options{
-		UnilateralDataHandler: handler,
-	}
-
-	if ic.config.Port == 993 {
-		return ic.dialImplicitTLS(ctx, conn, opts)
-	}
-
-	return ic.dialStartTLS(conn, opts)
-}
-
-func (ic *IdleConnection) dialImplicitTLS(ctx context.Context, conn net.Conn, opts *imapclient.Options) (*imapclient.Client, error) {
-	tlsConfig := &tls.Config{ServerName: ic.config.Host}
-	tlsConn := tls.Client(conn, tlsConfig)
-
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		conn.Close()
-
-		return nil, err
-	}
-
-	opts.TLSConfig = tlsConfig
-
-	return imapclient.New(tlsConn, opts), nil
-}
-
-func (ic *IdleConnection) dialStartTLS(conn net.Conn, opts *imapclient.Options) (*imapclient.Client, error) {
-	opts.TLSConfig = &tls.Config{ServerName: ic.config.Host}
-
-	client, err := imapclient.NewStartTLS(conn, opts)
-
-	if err != nil {
-		conn.Close()
-
-		return nil, err
-	}
-
-	return client, nil
 }
 
 // handleMailboxUpdate is called by go-imap when the mailbox state changes.
@@ -394,41 +343,10 @@ func HasIdleCapability(ctx context.Context, host string, port int, username, pas
 		defer cancel()
 	}
 
-	addr := fmt.Sprintf("%s:%d", host, port)
-
-	dialer := &net.Dialer{}
-
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	client, err := letterboximap.Dial(ctx, host, port, nil)
 
 	if err != nil {
 		return false, fmt.Errorf("%w: %v", ErrConnectionFailed, err)
-	}
-
-	var client *imapclient.Client
-
-	if port == 993 {
-		tlsConfig := &tls.Config{ServerName: host}
-		tlsConn := tls.Client(conn, tlsConfig)
-
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			conn.Close()
-
-			return false, fmt.Errorf("TLS handshake failed: %w", err)
-		}
-
-		client = imapclient.New(tlsConn, nil)
-	} else {
-		opts := &imapclient.Options{
-			TLSConfig: &tls.Config{ServerName: host},
-		}
-
-		client, err = imapclient.NewStartTLS(conn, opts)
-
-		if err != nil {
-			conn.Close()
-
-			return false, fmt.Errorf("STARTTLS failed: %w", err)
-		}
 	}
 
 	defer client.Close()

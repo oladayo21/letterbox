@@ -36,21 +36,15 @@ type EmailPayload struct {
 	UID         int64                 `json:"uid"`
 	MessageID   string                `json:"message_id,omitempty"`
 	Date        time.Time             `json:"date"`
-	From        EmailAddressPayload   `json:"from"`
-	To          []EmailAddressPayload `json:"to"`
-	CC          []EmailAddressPayload `json:"cc,omitempty"`
+	From        domain.EmailAddress   `json:"from"`
+	To          []domain.EmailAddress `json:"to"`
+	CC          []domain.EmailAddress `json:"cc,omitempty"`
 	Subject     string                `json:"subject"`
 	Parsed      ParsedContent         `json:"parsed"`
 	Raw         string                `json:"raw,omitempty"`
 	Attachments []AttachmentPayload   `json:"attachments"`
 	Flags       []string              `json:"flags"`
 	Folder      string                `json:"folder"`
-}
-
-// EmailAddressPayload represents an email address in the payload.
-type EmailAddressPayload struct {
-	Name  string `json:"name,omitempty"`
-	Email string `json:"email"`
 }
 
 // ParsedContent contains the parsed email body.
@@ -183,26 +177,6 @@ func (p *Producer) buildPayload(ctx context.Context, email *domain.Email) *Webho
 		})
 	}
 
-	// Convert To recipients
-	to := make([]EmailAddressPayload, 0, len(email.To))
-
-	for _, addr := range email.To {
-		to = append(to, EmailAddressPayload{
-			Name:  addr.Name,
-			Email: addr.Email,
-		})
-	}
-
-	// Convert CC recipients
-	cc := make([]EmailAddressPayload, 0, len(email.CC))
-
-	for _, addr := range email.CC {
-		cc = append(cc, EmailAddressPayload{
-			Name:  addr.Name,
-			Email: addr.Email,
-		})
-	}
-
 	return &WebhookPayload{
 		Event:     "email.received",
 		Timestamp: time.Now().UTC(),
@@ -212,12 +186,12 @@ func (p *Producer) buildPayload(ctx context.Context, email *domain.Email) *Webho
 			UID:       email.UID,
 			MessageID: email.MessageID,
 			Date:      email.Date,
-			From: EmailAddressPayload{
+			From: domain.EmailAddress{
 				Name:  email.FromName,
 				Email: email.FromEmail,
 			},
-			To:      to,
-			CC:      cc,
+			To:      email.To,
+			CC:      email.CC,
 			Subject: email.Subject,
 			Parsed: ParsedContent{
 				Text: email.ParsedText,

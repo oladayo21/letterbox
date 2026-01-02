@@ -19,7 +19,6 @@ import (
 	"github.com/oladayo21/letterbox/internal/ingest"
 	"github.com/oladayo21/letterbox/internal/logging"
 	"github.com/oladayo21/letterbox/internal/repository"
-	"github.com/oladayo21/letterbox/internal/search"
 	"github.com/oladayo21/letterbox/internal/storage"
 	"github.com/oladayo21/letterbox/internal/sync"
 	"github.com/oladayo21/letterbox/internal/webhook"
@@ -90,9 +89,6 @@ func main() {
 	// Initialize ingester
 	ingester := ingest.NewIngester(accountRepo, emailRepo, attachmentRepo, s3Storage)
 
-	// Initialize search service
-	searchSvc := search.NewService(emailRepo)
-
 	// Initialize webhook producer and worker
 	webhookProducer := webhook.NewProducer(queries, webhookRepo, s3Storage)
 	webhookWorker := webhook.NewWorker(queries, webhookRepo, webhook.WorkerConfig{})
@@ -110,7 +106,6 @@ func main() {
 		WebhookRepo:    webhookRepo,
 		Ingester:       ingester,
 		S3:             s3Storage,
-		SearchSvc:      searchSvc,
 		DB:             pool,
 	})
 

@@ -2,16 +2,15 @@ package sync
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	gosync "sync"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	letterboximap "github.com/oladayo21/letterbox/internal/imap"
 )
 
 // Default polling configuration.
@@ -297,9 +296,7 @@ type folderStatus struct {
 
 // fetchStatus connects to IMAP and fetches folder status.
 func (p *Poller) fetchStatus(ctx context.Context, config IdleConfig) (*folderStatus, error) {
-	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
-
-	client, err := p.dial(ctx, addr, config.Host, config.Port)
+	client, err := p.dial(ctx, config.Host, config.Port)
 
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrConnectionFailed, err)
@@ -370,39 +367,6 @@ func (p *Poller) emitEvent(entry *pollerEntry, numMessages uint32) {
 }
 
 // dial connects to the IMAP server.
-func (p *Poller) dial(ctx context.Context, addr, host string, port int) (*imapclient.Client, error) {
-	dialer := &net.Dialer{}
-
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
-
-	if err != nil {
-		return nil, err
-	}
-
-	if port == 993 {
-		tlsConfig := &tls.Config{ServerName: host}
-		tlsConn := tls.Client(conn, tlsConfig)
-
-		if err := tlsConn.HandshakeContext(ctx); err != nil {
-			conn.Close()
-
-			return nil, err
-		}
-
-		return imapclient.New(tlsConn, nil), nil
-	}
-
-	opts := &imapclient.Options{
-		TLSConfig: &tls.Config{ServerName: host},
-	}
-
-	client, err := imapclient.NewStartTLS(conn, opts)
-
-	if err != nil {
-		conn.Close()
-
-		return nil, err
-	}
-
-	return client, nil
+func (p *Poller) dial(ctx context.Context, host string, port int) (*imapclient.Client, error) {
+	return letterboximap.Dial(ctx, host, port, nil)
 }

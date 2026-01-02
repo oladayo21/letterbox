@@ -18,11 +18,7 @@ import (
 	"github.com/oladayo21/letterbox/internal/storage"
 )
 
-const (
-	defaultLimit       = 50
-	maxLimit           = 100
-	presignedURLExpiry = 1 * time.Hour
-)
+const presignedURLExpiry = 1 * time.Hour
 
 type MessageHandler struct {
 	accountRepo    *repository.AccountRepository
@@ -50,15 +46,15 @@ func NewMessageHandler(
 }
 
 type messageListItem struct {
-	ID        uuid.UUID            `json:"id"`
-	UID       int64                `json:"uid"`
-	MessageID string               `json:"message_id,omitempty"`
-	Folder    string               `json:"folder"`
-	Subject   string               `json:"subject"`
-	From      domain.EmailAddress  `json:"from"`
+	ID        uuid.UUID             `json:"id"`
+	UID       int64                 `json:"uid"`
+	MessageID string                `json:"message_id,omitempty"`
+	Folder    string                `json:"folder"`
+	Subject   string                `json:"subject"`
+	From      domain.EmailAddress   `json:"from"`
 	To        []domain.EmailAddress `json:"to"`
-	Date      time.Time            `json:"date"`
-	Flags     []string             `json:"flags"`
+	Date      time.Time             `json:"date"`
+	Flags     []string              `json:"flags"`
 }
 
 func toMessageListItem(e *domain.Email) messageListItem {
@@ -176,27 +172,10 @@ func (h *MessageHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 func parseListParams(r *http.Request) (limit, offset int, before, after *time.Time, err error) {
-	limit = defaultLimit
-	offset = 0
+	limit, offset, err = parsePaginationParams(r)
 
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		limit, err = strconv.Atoi(limitStr)
-
-		if err != nil || limit < 1 {
-			return 0, 0, nil, nil, errors.New("invalid limit")
-		}
-
-		if limit > maxLimit {
-			limit = maxLimit
-		}
-	}
-
-	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		offset, err = strconv.Atoi(offsetStr)
-
-		if err != nil || offset < 0 {
-			return 0, 0, nil, nil, errors.New("invalid offset")
-		}
+	if err != nil {
+		return 0, 0, nil, nil, err
 	}
 
 	if beforeStr := r.URL.Query().Get("before"); beforeStr != "" {
@@ -231,19 +210,19 @@ type attachmentResponse struct {
 }
 
 type messageResponse struct {
-	ID          uuid.UUID              `json:"id"`
-	UID         int64                  `json:"uid"`
-	MessageID   string                 `json:"message_id,omitempty"`
-	Folder      string                 `json:"folder"`
-	Subject     string                 `json:"subject"`
-	From        domain.EmailAddress    `json:"from"`
-	To          []domain.EmailAddress  `json:"to"`
-	CC          []domain.EmailAddress  `json:"cc,omitempty"`
-	Date        time.Time              `json:"date"`
-	Parsed      parsedContent          `json:"parsed"`
-	Raw         string                 `json:"raw"`
-	Attachments []attachmentResponse   `json:"attachments"`
-	Flags       []string               `json:"flags"`
+	ID          uuid.UUID             `json:"id"`
+	UID         int64                 `json:"uid"`
+	MessageID   string                `json:"message_id,omitempty"`
+	Folder      string                `json:"folder"`
+	Subject     string                `json:"subject"`
+	From        domain.EmailAddress   `json:"from"`
+	To          []domain.EmailAddress `json:"to"`
+	CC          []domain.EmailAddress `json:"cc,omitempty"`
+	Date        time.Time             `json:"date"`
+	Parsed      parsedContent         `json:"parsed"`
+	Raw         string                `json:"raw"`
+	Attachments []attachmentResponse  `json:"attachments"`
+	Flags       []string              `json:"flags"`
 }
 
 type parsedContent struct {
@@ -383,8 +362,8 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 			Name:  email.FromName,
 			Email: email.FromEmail,
 		},
-		To: email.To,
-		CC: email.CC,
+		To:   email.To,
+		CC:   email.CC,
 		Date: email.Date,
 		Parsed: parsedContent{
 			Text: email.ParsedText,
