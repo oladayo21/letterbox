@@ -16,130 +16,13 @@ IMAP-to-REST facade with webhook support. Expose email accounts via REST API wit
 
 ## Architecture
 
-```mermaid
-graph TB
-    subgraph Clients
-        APP[Client Apps]
-    end
-
-    subgraph letterbox[Letterbox Service]
-        subgraph API[API Layer]
-            REST[REST API<br/>Chi Router]
-            AUTH[API Key Auth]
-        end
-
-        subgraph Handlers
-            AH[Account Handler]
-            FH[Folder Handler]
-            MH[Message Handler]
-            WH[Webhook Handler]
-            SH[Search Handler]
-        end
-
-        subgraph Sync[Sync System]
-            COORD[Coordinator]
-            IDLE[IDLE Pool<br/>Real-time]
-            POLL[Poller<br/>60s interval]
-        end
-
-        subgraph Webhook[Webhook System]
-            PROD[Producer<br/>Queue emails]
-            WORK[Worker<br/>Deliver + Retry]
-        end
-
-        subgraph Core[Core Services]
-            ING[Ingester<br/>Fetch → Parse → Store]
-            PARSE[Parser<br/>RFC822 → Structured]
-            IMAPC[IMAP Client]
-        end
-
-        subgraph Data[Data Layer]
-            REPO[Repositories]
-            CRYPT[Crypto<br/>AES-256]
-            S3C[S3 Storage]
-        end
-    end
-
-    subgraph Storage
-        PG[(PostgreSQL<br/>emails, webhooks<br/>queue, FTS)]
-        MINIO[(S3 Compatible<br/>Attachments)]
-    end
-
-    subgraph External
-        IMAP[IMAP Servers<br/>Gmail, Outlook, etc.]
-        WEBHOOK_EP[Webhook Endpoints]
-    end
-
-    APP -->|HTTP + API Key| AUTH
-    AUTH --> REST
-    REST --> AH & FH & MH & WH & SH
-    AH & FH & MH & SH --> REPO
-    MH -->|on-demand fetch| ING
-    WH --> REPO
-
-    COORD --> IDLE & POLL
-    IDLE & POLL <-->|IMAP| IMAP
-    IDLE & POLL -->|new email| COORD
-    COORD --> ING
-    ING --> IMAPC
-    IMAPC --> IMAP
-    ING --> PARSE
-    ING --> REPO
-    ING --> S3C
-
-    COORD -->|on new email| PROD
-    PROD --> PG
-    WORK -->|poll queue| PG
-    WORK -->|POST + HMAC| WEBHOOK_EP
-
-    REPO --> PG
-    REPO --> CRYPT
-    S3C --> MINIO
 ```
-
-### Data Flow
-
-```
-New Email Flow:
-
 IMAP Server ──► IDLE/Poller ──► Coordinator ──► Ingester ──► PostgreSQL
                                                    │
                                                    └──► S3 (attachments)
                                                    │
                                                    ▼
                                             Webhook Producer ──► Queue ──► Worker ──► Your Endpoint
-```
-
-### Package Structure
-
-```mermaid
-graph LR
-    subgraph cmd
-        MAIN[main.go]
-    end
-
-    subgraph internal
-        API[api]
-        SYNC[sync]
-        WEBHOOK[webhook]
-        INGEST[ingest]
-        IMAPC[imap]
-        PARSER[parser]
-        REPO[repository]
-        STORAGE[storage]
-        DB[db]
-        CRYPTO[crypto]
-        DOMAIN[domain]
-    end
-
-    MAIN --> API & SYNC & WEBHOOK & INGEST & REPO & STORAGE
-
-    API --> REPO & INGEST & STORAGE & IMAPC
-    SYNC --> IMAPC & INGEST & REPO
-    WEBHOOK --> REPO & STORAGE & DB
-    INGEST --> IMAPC & PARSER & REPO & STORAGE
-    REPO --> DB & CRYPTO & DOMAIN
-    PARSER --> DOMAIN
 ```
 
 | Package | Purpose |
