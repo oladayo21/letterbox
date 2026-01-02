@@ -43,9 +43,10 @@ func (q *Queries) CreateWebhookQueueItem(ctx context.Context, arg CreateWebhookQ
 
 const getPendingWebhookQueueItems = `-- name: GetPendingWebhookQueueItems :many
 SELECT id, webhook_id, email_id, payload, attempts, next_attempt, status, created_at FROM webhook_queue
-WHERE status = 'pending' AND next_attempt <= NOW()
+WHERE status = 'pending' AND (next_attempt IS NULL OR next_attempt <= NOW())
 ORDER BY created_at ASC
 LIMIT $1
+FOR UPDATE SKIP LOCKED
 `
 
 func (q *Queries) GetPendingWebhookQueueItems(ctx context.Context, limit int32) ([]WebhookQueue, error) {

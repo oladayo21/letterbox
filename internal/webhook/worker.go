@@ -6,7 +6,9 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -54,8 +56,9 @@ type Worker struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
-	mu     sync.Mutex
-	closed bool
+	mu      sync.Mutex
+	started bool
+	closed  bool
 }
 
 // NewWorker creates a new webhook delivery worker.
@@ -92,6 +95,17 @@ func NewWorker(
 
 // Start begins the worker polling loop.
 func (w *Worker) Start() {
+	w.mu.Lock()
+
+	if w.started {
+		w.mu.Unlock()
+
+		return
+	}
+
+	w.started = true
+	w.mu.Unlock()
+
 	w.wg.Add(1)
 
 	go w.run()
@@ -180,6 +194,11 @@ func (w *Worker) deliverWebhook(item db.WebhookQueue) {
 	webhook, err := w.webhookRepo.Get(w.ctx, webhookID)
 
 	if err != nil {
+		// Context cancelled during shutdown - leave as pending for next worker
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+
 		slog.Error("failed to get webhook for delivery",
 			"queue_id", itemID,
 			"webhook_id", webhookID,
@@ -195,6 +214,11 @@ func (w *Worker) deliverWebhook(item db.WebhookQueue) {
 	err = w.sendWebhook(webhook.URL, webhook.Secret, item.Payload)
 
 	if err != nil {
+		// Context cancelled during shutdown - leave as pending for next worker
+		if errors.Is(err, context.Canceled) {
+			return
+		}
+
 		slog.Error("webhook delivery failed",
 			"queue_id", itemID,
 			"webhook_id", webhookID,
@@ -207,8 +231,16 @@ func (w *Worker) deliverWebhook(item db.WebhookQueue) {
 		return
 	}
 
-	// Success
-	w.markDelivered(item.ID)
+	// Success - mark delivered
+	if !w.markDelivered(item.ID) {
+		slog.Error("CRITICAL: webhook delivered but failed to update status",
+			"queue_id", itemID,
+			"webhook_id", webhookID,
+			"url", webhook.URL,
+		)
+
+		return
+	}
 
 	slog.Info("webhook delivered",
 		"queue_id", itemID,
@@ -238,7 +270,11 @@ func (w *Worker) sendWebhook(url, secret string, payload []byte) error {
 		return fmt.Errorf("sending request: %w", err)
 	}
 
-	defer resp.Body.Close()
+	defer func() {
+		// Drain body for connection reuse
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
 
 	// Consider 2xx as success
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -260,7 +296,8 @@ func computeSignature(payload []byte, secret string, timestamp int64) string {
 }
 
 // markDelivered marks a queue item as successfully delivered.
-func (w *Worker) markDelivered(id pgtype.UUID) {
+// Returns true if the update succeeded.
+func (w *Worker) markDelivered(id pgtype.UUID) bool {
 	_, err := w.queries.MarkWebhookQueueDelivered(w.ctx, id)
 
 	if err != nil {
@@ -268,11 +305,16 @@ func (w *Worker) markDelivered(id pgtype.UUID) {
 			"queue_id", pgtypeToUUID(id),
 			"error", err,
 		)
+
+		return false
 	}
+
+	return true
 }
 
 // markFailed marks a queue item as failed.
-func (w *Worker) markFailed(id pgtype.UUID) {
+// Returns true if the update succeeded.
+func (w *Worker) markFailed(id pgtype.UUID) bool {
 	_, err := w.queries.MarkWebhookQueueFailed(w.ctx, id)
 
 	if err != nil {
@@ -280,7 +322,11 @@ func (w *Worker) markFailed(id pgtype.UUID) {
 			"queue_id", pgtypeToUUID(id),
 			"error", err,
 		)
+
+		return false
 	}
+
+	return true
 }
 
 // pgtypeToUUID converts pgtype.UUID to uuid.UUID.

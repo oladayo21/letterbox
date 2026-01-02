@@ -10,9 +10,10 @@ SELECT * FROM webhook_queue WHERE id = $1;
 
 -- name: GetPendingWebhookQueueItems :many
 SELECT * FROM webhook_queue
-WHERE status = 'pending' AND next_attempt <= NOW()
+WHERE status = 'pending' AND (next_attempt IS NULL OR next_attempt <= NOW())
 ORDER BY created_at ASC
-LIMIT $1;
+LIMIT $1
+FOR UPDATE SKIP LOCKED;
 
 -- name: UpdateWebhookQueueStatus :execrows
 UPDATE webhook_queue
