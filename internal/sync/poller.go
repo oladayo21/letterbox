@@ -24,52 +24,15 @@ var (
 	ErrPollerClosed = errors.New("poller is closed")
 )
 
-// PollerConfig contains configuration for a polling account.
-type PollerConfig struct {
-	AccountID string
-	Host      string
-	Port      int
-	Username  string
-	Password  string
-	Folder    string
-}
-
-func (c PollerConfig) validate() error {
-	if c.AccountID == "" {
-		return errors.New("account_id is required")
-	}
-
-	if c.Host == "" {
-		return errors.New("host is required")
-	}
-
-	if c.Port <= 0 {
-		return errors.New("port must be positive")
-	}
-
-	if c.Username == "" {
-		return errors.New("username is required")
-	}
-
-	if c.Password == "" {
-		return errors.New("password is required")
-	}
-
-	if c.Folder == "" {
-		return errors.New("folder is required")
-	}
-
-	return nil
-}
-
 // pollerEntry holds state for a single polling account.
 type pollerEntry struct {
-	config PollerConfig
+	config IdleConfig
 
 	// Last known state
 	uidNext     uint32
 	numMessages uint32
 	initialized bool
+	failedPolls int // Track consecutive failures before initialization
 
 	// Control
 	stopCh chan struct{}
@@ -94,6 +57,11 @@ type Poller struct {
 // If interval is less than 10 seconds, it defaults to 60 seconds.
 func NewPoller(interval time.Duration) *Poller {
 	if interval < minPollInterval {
+		slog.Warn("poll interval too low, using default",
+			"requested", interval,
+			"minimum", minPollInterval,
+			"using", DefaultPollInterval,
+		)
 		interval = DefaultPollInterval
 	}
 
@@ -115,7 +83,7 @@ func (p *Poller) Events() <-chan IdleEvent {
 }
 
 // AddAccount adds an account to the poller.
-func (p *Poller) AddAccount(config PollerConfig) error {
+func (p *Poller) AddAccount(config IdleConfig) error {
 	if err := config.validate(); err != nil {
 		return err
 	}
@@ -263,25 +231,42 @@ func (p *Poller) poll(entry *pollerEntry) {
 	status, err := p.fetchStatus(ctx, entry.config)
 
 	if err != nil {
+		if !entry.initialized {
+			entry.failedPolls++
+		}
+
 		slog.Warn("poll failed",
 			"account_id", entry.config.AccountID,
+			"host", entry.config.Host,
 			"error", err,
 		)
 
 		return
 	}
 
-	// First poll - just record state, don't emit events
+	// First successful poll
 	if !entry.initialized {
 		entry.uidNext = status.uidNext
 		entry.numMessages = status.numMessages
 		entry.initialized = true
 
-		slog.Debug("poller initialized",
-			"account_id", entry.config.AccountID,
-			"uid_next", status.uidNext,
-			"num_messages", status.numMessages,
-		)
+		// If we had failures before initializing, emit an event to trigger
+		// a sync in case messages arrived during the failure period
+		if entry.failedPolls > 0 && status.numMessages > 0 {
+			slog.Info("poller initialized after failures, triggering sync",
+				"account_id", entry.config.AccountID,
+				"failed_polls", entry.failedPolls,
+				"num_messages", status.numMessages,
+			)
+
+			p.emitEvent(entry, status.numMessages)
+		} else {
+			slog.Debug("poller initialized",
+				"account_id", entry.config.AccountID,
+				"uid_next", status.uidNext,
+				"num_messages", status.numMessages,
+			)
+		}
 
 		return
 	}
@@ -311,7 +296,7 @@ type folderStatus struct {
 }
 
 // fetchStatus connects to IMAP and fetches folder status.
-func (p *Poller) fetchStatus(ctx context.Context, config PollerConfig) (*folderStatus, error) {
+func (p *Poller) fetchStatus(ctx context.Context, config IdleConfig) (*folderStatus, error) {
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 
 	client, err := p.dial(ctx, addr, config.Host, config.Port)
