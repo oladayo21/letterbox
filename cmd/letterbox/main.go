@@ -2,9 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -16,6 +21,12 @@ import (
 	"github.com/oladayo21/letterbox/internal/repository"
 	"github.com/oladayo21/letterbox/internal/search"
 	"github.com/oladayo21/letterbox/internal/storage"
+	"github.com/oladayo21/letterbox/internal/sync"
+	"github.com/oladayo21/letterbox/internal/webhook"
+)
+
+const (
+	shutdownTimeout = 30 * time.Second
 )
 
 func main() {
@@ -36,8 +47,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("database connection error: %v", err)
 	}
-
-	defer pool.Close()
 
 	if err := pool.Ping(ctx); err != nil {
 		log.Fatalf("database ping error: %v", err)
@@ -84,6 +93,15 @@ func main() {
 	// Initialize search service
 	searchSvc := search.NewService(emailRepo)
 
+	// Initialize webhook producer and worker
+	webhookProducer := webhook.NewProducer(queries, webhookRepo, s3Storage)
+	webhookWorker := webhook.NewWorker(queries, webhookRepo, webhook.WorkerConfig{})
+
+	// Initialize sync coordinator with webhook handler
+	coordinator := sync.NewCoordinator(ingester, accountRepo, sync.CoordinatorConfig{
+		EventHandler: webhookProducer.EventHandler(),
+	})
+
 	router := api.NewRouter(api.RouterConfig{
 		APIKey:         cfg.APIKey,
 		AccountRepo:    accountRepo,
@@ -96,6 +114,85 @@ func main() {
 		DB:             pool,
 	})
 
-	slog.Info("letterbox starting", "port", cfg.Port)
-	log.Fatal(http.ListenAndServe(":"+cfg.Port, router))
+	server := &http.Server{
+		Addr:    ":" + cfg.Port,
+		Handler: router,
+	}
+
+	// Start background services
+	coordinator.Start()
+	webhookWorker.Start()
+
+	// Load existing accounts into sync coordinator
+	go loadExistingAccounts(ctx, accountRepo, coordinator)
+
+	// Start HTTP server in goroutine
+	go func() {
+		slog.Info("letterbox starting", "port", cfg.Port)
+
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Error("HTTP server error", "error", err)
+		}
+	}()
+
+	// Wait for shutdown signal
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	sig := <-quit
+
+	slog.Info("shutdown signal received", "signal", sig.String())
+
+	// Create shutdown context with timeout
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+
+	// Shutdown components in order
+	slog.Info("stopping sync coordinator...")
+
+	if err := coordinator.Close(); err != nil {
+		slog.Error("coordinator shutdown error", "error", err)
+	}
+
+	slog.Info("stopping webhook worker...")
+
+	if err := webhookWorker.Stop(); err != nil {
+		slog.Error("webhook worker shutdown error", "error", err)
+	}
+
+	slog.Info("stopping HTTP server...")
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		slog.Error("HTTP server shutdown error", "error", err)
+	}
+
+	slog.Info("closing database connections...")
+	pool.Close()
+
+	slog.Info("letterbox stopped")
+}
+
+// loadExistingAccounts loads all accounts into the sync coordinator on startup.
+func loadExistingAccounts(ctx context.Context, accountRepo *repository.AccountRepository, coordinator *sync.Coordinator) {
+	accounts, err := accountRepo.List(ctx)
+
+	if err != nil {
+		slog.Error("failed to load accounts for sync", "error", err)
+
+		return
+	}
+
+	for _, account := range accounts {
+		if err := coordinator.AddAccount(ctx, account.ID); err != nil {
+			slog.Error("failed to add account to sync",
+				"account_id", account.ID,
+				"account_name", account.Name,
+				"error", err,
+			)
+		} else {
+			slog.Info("account added to sync",
+				"account_id", account.ID,
+				"account_name", account.Name,
+			)
+		}
+	}
 }
