@@ -17,10 +17,6 @@ import (
 )
 
 const (
-	// MaxInlineAttachmentSize is the maximum size for inline attachment content.
-	// Attachments larger than this will use S3 presigned URLs instead.
-	MaxInlineAttachmentSize = 1 << 20 // 1MB
-
 	// PresignedURLExpiry is how long presigned URLs are valid for.
 	PresignedURLExpiry = 24 * time.Hour
 )
@@ -111,11 +107,7 @@ func (p *Producer) QueueForEmail(ctx context.Context, email *domain.Email) error
 	}
 
 	// Build the payload once for all webhooks
-	payload, err := p.buildPayload(ctx, email)
-
-	if err != nil {
-		return fmt.Errorf("building payload: %w", err)
-	}
+	payload := p.buildPayload(ctx, email)
 
 	payloadBytes, err := json.Marshal(payload)
 
@@ -124,6 +116,8 @@ func (p *Producer) QueueForEmail(ctx context.Context, email *domain.Email) error
 	}
 
 	// Queue for each webhook
+	var queuedCount int
+
 	for _, wh := range webhooks {
 		params := db.CreateWebhookQueueItemParams{
 			WebhookID: pgtype.UUID{Bytes: wh.ID, Valid: true},
@@ -136,12 +130,16 @@ func (p *Producer) QueueForEmail(ctx context.Context, email *domain.Email) error
 		if err != nil {
 			slog.Error("failed to queue webhook",
 				"webhook_id", wh.ID,
+				"webhook_url", wh.URL,
 				"email_id", email.ID,
+				"account_id", email.AccountID,
 				"error", err,
 			)
 
 			continue
 		}
+
+		queuedCount++
 
 		slog.Info("queued webhook delivery",
 			"webhook_id", wh.ID,
@@ -150,11 +148,15 @@ func (p *Producer) QueueForEmail(ctx context.Context, email *domain.Email) error
 		)
 	}
 
+	if queuedCount == 0 {
+		return fmt.Errorf("failed to queue all %d webhooks for email %s", len(webhooks), email.ID)
+	}
+
 	return nil
 }
 
 // buildPayload creates the webhook payload for an email.
-func (p *Producer) buildPayload(ctx context.Context, email *domain.Email) (*WebhookPayload, error) {
+func (p *Producer) buildPayload(ctx context.Context, email *domain.Email) *WebhookPayload {
 	// Build attachment payloads with presigned URLs
 	attachments := make([]AttachmentPayload, 0, len(email.Attachments))
 
@@ -162,14 +164,14 @@ func (p *Producer) buildPayload(ctx context.Context, email *domain.Email) (*Webh
 		url, err := p.s3.GeneratePresignedURL(ctx, att.S3Key, PresignedURLExpiry)
 
 		if err != nil {
-			slog.Warn("failed to generate presigned URL for attachment",
+			slog.Warn("failed to generate presigned URL for attachment, skipping",
 				"attachment_id", att.ID,
+				"filename", att.Filename,
 				"s3_key", att.S3Key,
 				"error", err,
 			)
 
-			// Use empty URL if presigning fails - better than failing entire webhook
-			url = ""
+			continue
 		}
 
 		attachments = append(attachments, AttachmentPayload{
@@ -225,7 +227,7 @@ func (p *Producer) buildPayload(ctx context.Context, email *domain.Email) (*Webh
 			Flags:       email.Flags,
 			Folder:      email.Folder,
 		},
-	}, nil
+	}
 }
 
 // EventHandler returns a function compatible with sync.Coordinator's EventHandler.
