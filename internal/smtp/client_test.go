@@ -3,8 +3,14 @@ package smtp
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
-	"fmt"
+	"math/big"
 	"net"
 	gosmtp "net/smtp"
 	"strings"
@@ -13,13 +19,14 @@ import (
 	"time"
 )
 
-// mockSMTPServer is a simple SMTP server for testing.
+// mockSMTPServer is a simple SMTP server for testing with optional TLS support.
 type mockSMTPServer struct {
-	listener net.Listener
-	authUser string
-	authPass string
-	failAuth bool
-	failSend bool
+	listener  net.Listener
+	tlsConfig *tls.Config
+	authUser  string
+	authPass  string
+	failAuth  bool
+	failSend  bool
 
 	mu            sync.Mutex
 	receivedMail  []receivedEmail
@@ -32,10 +39,11 @@ type receivedEmail struct {
 	message []byte
 }
 
-func newMockSMTPServer(t *testing.T, port int) *mockSMTPServer {
+// newMockSMTPServer creates a non-TLS mock server (for testing error cases).
+func newMockSMTPServer(t *testing.T) *mockSMTPServer {
 	t.Helper()
 
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to start mock SMTP server: %v", err)
 	}
@@ -49,6 +57,70 @@ func newMockSMTPServer(t *testing.T, port int) *mockSMTPServer {
 	go server.serve()
 
 	return server
+}
+
+// newMockSMTPServerWithTLS creates a TLS-capable mock server.
+func newMockSMTPServerWithTLS(t *testing.T) *mockSMTPServer {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to start mock SMTP server: %v", err)
+	}
+
+	tlsConfig := generateTestTLSConfig(t)
+
+	server := &mockSMTPServer{
+		listener:  listener,
+		tlsConfig: tlsConfig,
+		authUser:  "testuser",
+		authPass:  "testpass",
+	}
+
+	go server.serve()
+
+	return server
+}
+
+// generateTestTLSConfig creates a self-signed certificate for testing.
+func generateTestTLSConfig(t *testing.T) *tls.Config {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject: pkix.Name{
+			Organization: []string{"Test"},
+		},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("failed to create certificate: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
+
+	cert, err := tls.X509KeyPair(certPEM, keyPEM)
+	if err != nil {
+		t.Fatalf("failed to load key pair: %v", err)
+	}
+
+	return &tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
 }
 
 func (s *mockSMTPServer) addr() string {
@@ -133,7 +205,30 @@ func (s *mockSMTPServer) handleConn(conn net.Conn) {
 		case "EHLO", "HELO":
 			s.writeLine(writer, "250-localhost")
 			s.writeLine(writer, "250-AUTH PLAIN LOGIN")
+			if s.tlsConfig != nil {
+				s.writeLine(writer, "250-STARTTLS")
+			}
 			s.writeLine(writer, "250 OK")
+
+		case "STAR": // STARTTLS
+			if s.tlsConfig == nil {
+				s.writeLine(writer, "502 Command not implemented")
+				continue
+			}
+
+			s.writeLine(writer, "220 Ready to start TLS")
+			writer.Flush()
+
+			// Upgrade to TLS
+			tlsConn := tls.Server(conn, s.tlsConfig)
+			if err := tlsConn.Handshake(); err != nil {
+				return
+			}
+
+			// Replace connection and readers/writers
+			conn = tlsConn
+			reader = bufio.NewReader(conn)
+			writer = bufio.NewWriter(conn)
 
 		case "AUTH":
 			if s.failAuth {
@@ -168,10 +263,11 @@ func (s *mockSMTPServer) handleConn(conn net.Conn) {
 				}
 
 			case "LOGIN":
-				s.writeLine(writer, "334 Username:")
-				reader.ReadString('\n') // Read username
-				s.writeLine(writer, "334 Password:")
-				reader.ReadString('\n') // Read password
+				// LOGIN auth uses base64-encoded prompts
+				s.writeLine(writer, "334 VXNlcm5hbWU6") // base64("Username:")
+				reader.ReadString('\n')                 // Read base64 username
+				s.writeLine(writer, "334 UGFzc3dvcmQ6") // base64("Password:")
+				reader.ReadString('\n')                 // Read base64 password
 				s.mu.Lock()
 				s.authenticated = true
 				s.mu.Unlock()
@@ -221,8 +317,14 @@ func (s *mockSMTPServer) writeLine(w *bufio.Writer, line string) {
 	w.Flush()
 }
 
+func TestMain(m *testing.M) {
+	// Enable insecure mode for testing with self-signed certs
+	insecureSkipVerify = true
+	m.Run()
+}
+
 func TestTestConnection_Success(t *testing.T) {
-	server := newMockSMTPServer(t, 0)
+	server := newMockSMTPServerWithTLS(t)
 	defer server.close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -235,7 +337,7 @@ func TestTestConnection_Success(t *testing.T) {
 }
 
 func TestTestConnection_AuthFailed(t *testing.T) {
-	server := newMockSMTPServer(t, 0)
+	server := newMockSMTPServerWithTLS(t)
 	server.failAuth = true
 	defer server.close()
 
@@ -278,8 +380,31 @@ func TestTestConnection_Timeout(t *testing.T) {
 	}
 }
 
+func TestTestConnection_NoSTARTTLS(t *testing.T) {
+	// Server without TLS support
+	server := newMockSMTPServer(t)
+	defer server.close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := TestConnection(ctx, "127.0.0.1", server.port(), "testuser", "testpass")
+	if err == nil {
+		t.Error("expected error when server doesn't support STARTTLS")
+	}
+
+	// Should fail with connection error (STARTTLS required)
+	if !errors.Is(err, ErrConnectionFailed) {
+		t.Errorf("expected ErrConnectionFailed, got %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "STARTTLS") {
+		t.Errorf("error should mention STARTTLS, got %v", err)
+	}
+}
+
 func TestSendEmail_Success(t *testing.T) {
-	server := newMockSMTPServer(t, 0)
+	server := newMockSMTPServerWithTLS(t)
 	defer server.close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -319,7 +444,7 @@ func TestSendEmail_Success(t *testing.T) {
 }
 
 func TestSendEmail_MultipleRecipients(t *testing.T) {
-	server := newMockSMTPServer(t, 0)
+	server := newMockSMTPServerWithTLS(t)
 	defer server.close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -354,8 +479,58 @@ func TestSendEmail_MultipleRecipients(t *testing.T) {
 	}
 }
 
+func TestSendEmail_EmptyRecipients(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := Config{
+		Host:     "127.0.0.1",
+		Port:     587,
+		Username: "testuser",
+		Password: "testpass",
+	}
+
+	message := []byte("From: sender@test.com\r\nSubject: Test\r\n\r\nHello!")
+
+	err := SendEmail(ctx, cfg, "sender@test.com", []string{}, message)
+	if err == nil {
+		t.Error("expected error for empty recipients")
+	}
+
+	if !errors.Is(err, ErrSendFailed) {
+		t.Errorf("expected ErrSendFailed, got %v", err)
+	}
+
+	if !strings.Contains(err.Error(), "no recipients") {
+		t.Errorf("error should mention no recipients, got %v", err)
+	}
+}
+
+func TestSendEmail_NilRecipients(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cfg := Config{
+		Host:     "127.0.0.1",
+		Port:     587,
+		Username: "testuser",
+		Password: "testpass",
+	}
+
+	message := []byte("From: sender@test.com\r\nSubject: Test\r\n\r\nHello!")
+
+	err := SendEmail(ctx, cfg, "sender@test.com", nil, message)
+	if err == nil {
+		t.Error("expected error for nil recipients")
+	}
+
+	if !errors.Is(err, ErrSendFailed) {
+		t.Errorf("expected ErrSendFailed, got %v", err)
+	}
+}
+
 func TestSendEmail_AuthFailed(t *testing.T) {
-	server := newMockSMTPServer(t, 0)
+	server := newMockSMTPServerWithTLS(t)
 	server.failAuth = true
 	defer server.close()
 
@@ -458,5 +633,18 @@ func TestClassifyError(t *testing.T) {
 				t.Errorf("expected %v, got %v", tt.expected, result)
 			}
 		})
+	}
+}
+
+func TestSelectAuth(t *testing.T) {
+	// This is a unit test for the auth mechanism parsing
+	// We test the logic by checking the function behavior
+
+	// Note: We can't easily mock smtp.Client, so we test the loginAuth directly
+	auth := &loginAuth{username: "user", password: "pass"}
+
+	mech, _, _ := auth.Start(&gosmtp.ServerInfo{})
+	if mech != "LOGIN" {
+		t.Errorf("loginAuth should use LOGIN mechanism, got %s", mech)
 	}
 }
