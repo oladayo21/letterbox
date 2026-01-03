@@ -393,9 +393,9 @@ func TestTestConnection_NoSTARTTLS(t *testing.T) {
 		t.Error("expected error when server doesn't support STARTTLS")
 	}
 
-	// Should fail with connection error (STARTTLS required)
-	if !errors.Is(err, ErrConnectionFailed) {
-		t.Errorf("expected ErrConnectionFailed, got %v", err)
+	// Should fail with TLS error (STARTTLS required)
+	if !errors.Is(err, ErrTLSFailed) {
+		t.Errorf("expected ErrTLSFailed, got %v", err)
 	}
 
 	if !strings.Contains(err.Error(), "STARTTLS") {

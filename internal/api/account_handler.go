@@ -15,6 +15,7 @@ import (
 	"github.com/oladayo21/letterbox/internal/domain"
 	"github.com/oladayo21/letterbox/internal/imap"
 	"github.com/oladayo21/letterbox/internal/repository"
+	"github.com/oladayo21/letterbox/internal/smtp"
 )
 
 const maxBodySize = 1 << 20 // 1MB
@@ -96,6 +97,24 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "IMAP validation failed: "+classifyImapError(err))
 
 		return
+	}
+
+	// Validate SMTP credentials if provided
+	if req.SmtpHost != "" {
+		if req.SmtpPort == 0 {
+			writeError(w, http.StatusBadRequest, "smtp_port is required when smtp_host is provided")
+
+			return
+		}
+
+		err = smtp.TestConnection(ctx, req.SmtpHost, req.SmtpPort, req.SmtpUser, req.SmtpPassword)
+
+		if err != nil {
+			slog.Warn("SMTP validation failed", "host", req.SmtpHost, "user", req.SmtpUser, "error", err)
+			writeError(w, http.StatusBadRequest, "SMTP validation failed: "+classifySmtpError(err))
+
+			return
+		}
 	}
 
 	input := domain.CreateAccountInput{
@@ -229,6 +248,27 @@ func classifyImapError(err error) string {
 
 	if errors.Is(err, imap.ErrListFoldersFailed) {
 		return "failed to list folders"
+	}
+
+	return "unknown error"
+}
+
+func classifySmtpError(err error) string {
+
+	if errors.Is(err, smtp.ErrAuthFailed) {
+		return "authentication failed"
+	}
+
+	if errors.Is(err, smtp.ErrTimeout) {
+		return "connection timed out"
+	}
+
+	if errors.Is(err, smtp.ErrTLSFailed) {
+		return "TLS handshake failed"
+	}
+
+	if errors.Is(err, smtp.ErrConnectionFailed) {
+		return "connection failed"
 	}
 
 	return "unknown error"
