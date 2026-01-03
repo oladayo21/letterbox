@@ -172,7 +172,7 @@ func dialStartTLS(conn net.Conn, host string) (*smtp.Client, error) {
 	ok, _ := client.Extension("STARTTLS")
 	if !ok {
 		client.Close()
-		return nil, fmt.Errorf("server does not support STARTTLS")
+		return nil, fmt.Errorf("%w: server does not support STARTTLS", ErrTLSFailed)
 	}
 
 	tlsConfig := &tls.Config{
@@ -264,6 +264,12 @@ func (a *loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
 }
 
 func classifyError(err error) error {
+	// If error already contains one of our sentinel errors, return as-is
+	if errors.Is(err, ErrTLSFailed) || errors.Is(err, ErrAuthFailed) ||
+		errors.Is(err, ErrTimeout) || errors.Is(err, ErrConnectionFailed) {
+		return err
+	}
+
 	if isTimeoutError(err) {
 		return fmt.Errorf("%w: %v", ErrTimeout, err)
 	}

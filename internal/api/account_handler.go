@@ -101,6 +101,12 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 	// Validate SMTP credentials if provided
 	if req.SmtpHost != "" {
+		if req.SmtpPort == 0 {
+			writeError(w, http.StatusBadRequest, "smtp_port is required when smtp_host is provided")
+
+			return
+		}
+
 		err = smtp.TestConnection(ctx, req.SmtpHost, req.SmtpPort, req.SmtpUser, req.SmtpPassword)
 
 		if err != nil {
