@@ -28,6 +28,21 @@ const (
 	shutdownTimeout = 30 * time.Second
 )
 
+// syncStatusAdapter adapts sync.Coordinator to api.SyncStatusProvider interface.
+type syncStatusAdapter struct {
+	coordinator *sync.Coordinator
+}
+
+func (a *syncStatusAdapter) Stats() api.SyncStats {
+	stats := a.coordinator.Stats()
+
+	return api.SyncStats{
+		IdleAccounts:   stats.IdleAccounts,
+		PolledAccounts: stats.PolledAccounts,
+		ConnectedIdle:  stats.ConnectedIdle,
+	}
+}
+
 func main() {
 	cfg, err := config.Load()
 
@@ -107,6 +122,7 @@ func main() {
 		Ingester:       ingester,
 		S3:             s3Storage,
 		DB:             pool,
+		Sync:           &syncStatusAdapter{coordinator: coordinator},
 	})
 
 	server := &http.Server{

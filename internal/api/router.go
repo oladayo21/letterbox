@@ -20,6 +20,7 @@ type RouterConfig struct {
 	Ingester       *ingest.Ingester
 	S3             *storage.S3Storage
 	DB             HealthChecker
+	Sync           SyncStatusProvider
 }
 
 func NewRouter(cfg RouterConfig) *chi.Mux {
@@ -30,7 +31,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 	r.Use(middleware.Recoverer)
 
 	// Health endpoints (unauthenticated)
-	healthHandler := NewHealthHandler(cfg.DB, cfg.S3)
+	healthHandler := NewHealthHandler(cfg.DB, cfg.S3, cfg.Sync)
 	r.Get("/health", healthHandler.Health)
 	r.Get("/ready", healthHandler.Ready)
 

@@ -14,11 +14,26 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/oladayo21/letterbox/internal/db"
+	"github.com/oladayo21/letterbox/internal/domain"
 	"github.com/oladayo21/letterbox/internal/repository"
 )
+
+// QueueReader defines the queue read operations needed by Worker.
+type QueueReader interface {
+	GetPendingWebhookQueueItems(ctx context.Context, limit int32) ([]db.WebhookQueue, error)
+	MarkWebhookQueueDelivered(ctx context.Context, id pgtype.UUID) (int64, error)
+	MarkWebhookQueueFailed(ctx context.Context, id pgtype.UUID) (int64, error)
+	UpdateWebhookQueueStatus(ctx context.Context, arg db.UpdateWebhookQueueStatusParams) (int64, error)
+}
+
+// WebhookGetter defines the webhook lookup operations needed by Worker.
+type WebhookGetter interface {
+	Get(ctx context.Context, id uuid.UUID) (*domain.Webhook, error)
+}
 
 const (
 	// DefaultPollInterval is the default interval between queue polls.
@@ -50,8 +65,8 @@ type WorkerConfig struct {
 
 // Worker polls the webhook queue and delivers payloads.
 type Worker struct {
-	queries     *db.Queries
-	webhookRepo *repository.WebhookRepository
+	queue       QueueReader
+	webhookRepo WebhookGetter
 	httpClient  *http.Client
 	config      WorkerConfig
 
@@ -66,8 +81,8 @@ type Worker struct {
 
 // NewWorker creates a new webhook delivery worker.
 func NewWorker(
-	queries *db.Queries,
-	webhookRepo *repository.WebhookRepository,
+	queue QueueReader,
+	webhookRepo WebhookGetter,
 	config WorkerConfig,
 ) *Worker {
 	if config.PollInterval == 0 {
@@ -89,7 +104,7 @@ func NewWorker(
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Worker{
-		queries:     queries,
+		queue:       queue,
 		webhookRepo: webhookRepo,
 		httpClient: &http.Client{
 			Timeout: config.HTTPTimeout,
@@ -166,7 +181,7 @@ func (w *Worker) run() {
 
 // processBatch fetches and processes a batch of pending webhook deliveries.
 func (w *Worker) processBatch() {
-	items, err := w.queries.GetPendingWebhookQueueItems(w.ctx, w.config.BatchSize)
+	items, err := w.queue.GetPendingWebhookQueueItems(w.ctx, w.config.BatchSize)
 
 	if err != nil {
 		slog.Error("failed to fetch pending webhooks", "error", err)
@@ -325,7 +340,7 @@ func computeSignature(payload []byte, secret string, timestamp int64) string {
 // markDelivered marks a queue item as successfully delivered.
 // Returns true if the update succeeded.
 func (w *Worker) markDelivered(id pgtype.UUID) bool {
-	_, err := w.queries.MarkWebhookQueueDelivered(w.ctx, id)
+	_, err := w.queue.MarkWebhookQueueDelivered(w.ctx, id)
 
 	if err != nil {
 		slog.Error("failed to mark webhook as delivered",
@@ -342,7 +357,7 @@ func (w *Worker) markDelivered(id pgtype.UUID) bool {
 // markFailed marks a queue item as permanently failed.
 // Returns true if the update succeeded.
 func (w *Worker) markFailed(id pgtype.UUID) bool {
-	_, err := w.queries.MarkWebhookQueueFailed(w.ctx, id)
+	_, err := w.queue.MarkWebhookQueueFailed(w.ctx, id)
 
 	if err != nil {
 		slog.Error("failed to mark webhook as failed",
@@ -407,7 +422,7 @@ func (w *Worker) scheduleRetry(id pgtype.UUID, currentAttempts int32) {
 		},
 	}
 
-	_, err := w.queries.UpdateWebhookQueueStatus(w.ctx, params)
+	_, err := w.queue.UpdateWebhookQueueStatus(w.ctx, params)
 
 	if err != nil {
 		slog.Error("failed to schedule retry, marking as failed",

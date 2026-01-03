@@ -112,6 +112,30 @@ func (s *S3Storage) GeneratePresignedURL(ctx context.Context, key string, expiry
 	return presigned.URL, nil
 }
 
+// Download retrieves an object's contents from S3.
+func (s *S3Storage) Download(ctx context.Context, key string) ([]byte, error) {
+	input := &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	}
+
+	result, err := s.client.GetObject(ctx, input)
+
+	if err != nil {
+		return nil, fmt.Errorf("downloading from S3: %w", err)
+	}
+
+	defer result.Body.Close()
+
+	buf := new(bytes.Buffer)
+
+	if _, err := buf.ReadFrom(result.Body); err != nil {
+		return nil, fmt.Errorf("reading S3 object body: %w", err)
+	}
+
+	return buf.Bytes(), nil
+}
+
 // Delete removes an object from S3.
 func (s *S3Storage) Delete(ctx context.Context, key string) error {
 	input := &s3.DeleteObjectInput{

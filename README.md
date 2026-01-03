@@ -34,23 +34,60 @@ All endpoints require `X-API-Key` header.
 | DELETE | `/accounts/{id}` | Delete account |
 | GET | `/accounts/{id}/folders` | List folders |
 | GET | `/accounts/{id}/folders/{name}/messages` | List messages |
-| GET | `/accounts/{id}/messages/{uid}` | Get message |
+| GET | `/accounts/{id}/messages/{uid}?folder=INBOX` | Get message (folder defaults to INBOX) |
 | POST | `/webhooks` | Create webhook |
 | GET | `/webhooks` | List webhooks |
 | DELETE | `/webhooks/{id}` | Delete webhook |
 | GET | `/search?q=...&account_id=...` | Search emails |
 | GET | `/health` | Liveness check |
-| GET | `/ready` | Readiness check |
+| GET | `/ready` | Readiness check (DB, S3, sync status) |
 
 ## Webhooks
 
-Payloads are signed with HMAC-SHA256:
+### Payload
 
+Webhook payloads include the full email with attachments:
+- Attachments < 1MB are base64-encoded inline (`data` field)
+- Attachments >= 1MB use presigned S3 URLs (`url` field)
+
+### Signature Verification
+
+Payloads are signed with HMAC-SHA256. Headers:
+- `X-Letterbox-Signature`: HMAC signature
+- `X-Letterbox-Timestamp`: Unix timestamp
+
+Signature formula:
 ```
 signature = HMAC-SHA256(timestamp + "." + payload, secret)
 ```
 
-Headers: `X-Letterbox-Signature`, `X-Letterbox-Timestamp`
+Verification example (Go):
+```go
+func verifyWebhook(r *http.Request, secret string) ([]byte, error) {
+    signature := r.Header.Get("X-Letterbox-Signature")
+    timestamp := r.Header.Get("X-Letterbox-Timestamp")
+    
+    // Check timestamp is recent (within 5 minutes)
+    ts, _ := strconv.ParseInt(timestamp, 10, 64)
+    if time.Now().Unix()-ts > 300 {
+        return nil, errors.New("timestamp too old")
+    }
+    
+    body, _ := io.ReadAll(r.Body)
+    
+    // Compute expected signature
+    message := fmt.Sprintf("%s.%s", timestamp, body)
+    h := hmac.New(sha256.New, []byte(secret))
+    h.Write([]byte(message))
+    expected := hex.EncodeToString(h.Sum(nil))
+    
+    if !hmac.Equal([]byte(signature), []byte(expected)) {
+        return nil, errors.New("invalid signature")
+    }
+    
+    return body, nil
+}
+```
 
 ## Configuration
 
