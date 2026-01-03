@@ -236,14 +236,14 @@ ORDER BY date DESC;
 
 ## MVP Scope
 
-Phase 1 (MVP):
-- [ ] Account management (IMAP config only)
-- [ ] Read emails via REST
-- [ ] List folders
-- [ ] Webhook subscriptions
-- [ ] Real-time new email notifications
-- [ ] Full-text search
-- [ ] Attachment storage
+Phase 1 (MVP) - COMPLETE:
+- [x] Account management (IMAP config only)
+- [x] Read emails via REST
+- [x] List folders
+- [x] Webhook subscriptions
+- [x] Real-time new email notifications
+- [x] Full-text search
+- [x] Attachment storage
 
 Phase 2:
 - [ ] SMTP send
