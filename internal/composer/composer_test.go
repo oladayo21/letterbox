@@ -110,6 +110,62 @@ func TestComposeEmail_Validate(t *testing.T) {
 			},
 			wantErr: ErrNoBody,
 		},
+		{
+			name: "invalid cc email",
+			email: ComposeEmail{
+				From:    domain.EmailAddress{Email: "sender@test.com"},
+				To:      []domain.EmailAddress{{Email: "valid@test.com"}},
+				CC:      []domain.EmailAddress{{Email: "bad-cc-email"}},
+				Subject: "Test",
+				Text:    "Hello",
+			},
+			wantErr: ErrInvalidEmail,
+		},
+		{
+			name: "invalid bcc email",
+			email: ComposeEmail{
+				From:    domain.EmailAddress{Email: "sender@test.com"},
+				To:      []domain.EmailAddress{{Email: "valid@test.com"}},
+				BCC:     []domain.EmailAddress{{Email: "bad-bcc-email"}},
+				Subject: "Test",
+				Text:    "Hello",
+			},
+			wantErr: ErrInvalidEmail,
+		},
+		{
+			name: "subject with newline (header injection)",
+			email: ComposeEmail{
+				From:    domain.EmailAddress{Email: "sender@test.com"},
+				To:      []domain.EmailAddress{{Email: "recipient@test.com"}},
+				Subject: "Test\r\nBcc: attacker@evil.com",
+				Text:    "Hello",
+			},
+			wantErr: ErrInvalidSubject,
+		},
+		{
+			name: "invalid in-reply-to format",
+			email: ComposeEmail{
+				From:      domain.EmailAddress{Email: "sender@test.com"},
+				To:        []domain.EmailAddress{{Email: "recipient@test.com"}},
+				Subject:   "Re: Test",
+				Text:      "Hello",
+				InReplyTo: "not-a-valid-message-id",
+			},
+			wantErr: ErrInvalidMessageID,
+		},
+		{
+			name: "inline attachment without content-id",
+			email: ComposeEmail{
+				From:    domain.EmailAddress{Email: "sender@test.com"},
+				To:      []domain.EmailAddress{{Email: "recipient@test.com"}},
+				Subject: "Test",
+				HTML:    "<img src='cid:missing'>",
+				Attachments: []Attachment{
+					{Filename: "img.png", ContentType: "image/png", Data: []byte{1}, IsInline: true, ContentID: ""},
+				},
+			},
+			wantErr: ErrMissingContentID,
+		},
 	}
 
 	for _, tt := range tests {
@@ -161,6 +217,11 @@ func TestComposeEmail_Build_PlainText(t *testing.T) {
 
 	if !strings.Contains(msgStr, "Subject: Test Subject") {
 		t.Error("missing or incorrect Subject header")
+	}
+
+	// Check Message-ID is generated
+	if !strings.Contains(msgStr, "Message-Id:") || !strings.Contains(msgStr, "@letterbox>") {
+		t.Error("missing or incorrect Message-Id header")
 	}
 
 	// Check body
@@ -332,6 +393,31 @@ func TestValidateEmail(t *testing.T) {
 			}
 			if !tt.isValid && err == nil {
 				t.Errorf("expected %q to be invalid", tt.email)
+			}
+		})
+	}
+}
+
+func TestIsValidMessageID(t *testing.T) {
+	tests := []struct {
+		id      string
+		isValid bool
+	}{
+		{"<abc123@example.com>", true},
+		{"<unique-id@letterbox>", true},
+		{"<123.456@domain.org>", true},
+		{"abc123@example.com", false}, // missing angle brackets
+		{"<abc123>", false},           // missing @
+		{"<>", false},                 // empty
+		{"", false},                   // empty string
+		{"<@domain>", false},          // missing local part (too short)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.id, func(t *testing.T) {
+			result := isValidMessageID(tt.id)
+			if result != tt.isValid {
+				t.Errorf("isValidMessageID(%q) = %v, want %v", tt.id, result, tt.isValid)
 			}
 		})
 	}
