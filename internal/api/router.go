@@ -53,6 +53,7 @@ func NewRouter(cfg RouterConfig) *chi.Mux {
 			r.Get("/{id}/folders", folderHandler.List)
 			r.Get("/{id}/folders/{name}/messages", messageHandler.ListMessages)
 			r.Get("/{id}/messages/{uid}", messageHandler.GetMessage)
+			r.Post("/{id}/messages", messageHandler.SendMessage)
 		})
 
 		r.Route("/webhooks", func(r chi.Router) {
