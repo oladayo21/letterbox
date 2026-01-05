@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -523,8 +524,15 @@ func (h *MessageHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	// Extract Message-ID from raw message for response
 	msgID := extractMessageID(rawMessage)
 
-	// Store sent email in local DB
-	go h.storeSentEmail(accountID, rawMessage, req, attachments)
+	if msgID == "" {
+		slog.Warn("could not extract Message-ID from sent email", "account_id", accountID)
+	}
+
+	// Store sent email in local DB (synchronous to ensure storage)
+	if err := h.storeSentEmail(r.Context(), account, rawMessage, req); err != nil {
+		slog.Error("email sent but storage failed", "account_id", accountID, "message_id", msgID, "error", err)
+		// Still return success - email was sent, just not stored locally
+	}
 
 	slog.Info("email sent successfully", "account_id", accountID, "message_id", msgID, "recipients", len(email.AllRecipients()))
 
@@ -592,36 +600,27 @@ func indexAt(s, substr string, start int) int {
 		return -1
 	}
 
-	idx := len(s[:start]) + len(substr)
+	idx := strings.Index(s[start:], substr)
 
-	if idx > len(s) {
-		idx = start
+	if idx == -1 {
+		return -1
 	}
 
-	for i := start; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-
-	return -1
+	return start + idx
 }
 
-func (h *MessageHandler) storeSentEmail(accountID uuid.UUID, raw []byte, req sendMessageRequest, _ []composer.Attachment) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
+func (h *MessageHandler) storeSentEmail(ctx context.Context, account *domain.Account, raw []byte, req sendMessageRequest) error {
 	// Parse the raw message to get Message-ID
 	msgID := extractMessageID(raw)
 
 	input := domain.CreateEmailInput{
-		AccountID:  accountID,
+		AccountID:  account.ID,
 		UID:        0, // Sent emails don't have IMAP UID
 		MessageID:  msgID,
 		Folder:     "Sent",
 		Subject:    req.Subject,
-		FromEmail:  "", // Will be set from account
-		FromName:   "",
+		FromEmail:  account.ImapUser,
+		FromName:   account.Name,
 		To:         req.To,
 		CC:         req.CC,
 		Date:       time.Now(),
@@ -631,21 +630,15 @@ func (h *MessageHandler) storeSentEmail(accountID uuid.UUID, raw []byte, req sen
 		Flags:      []string{"\\Seen"},
 	}
 
-	// Get account for from address
-	account, err := h.accountRepo.Get(ctx, accountID)
-
-	if err == nil {
-		input.FromEmail = account.ImapUser
-		input.FromName = account.Name
-	}
-
-	_, err = h.emailRepo.Create(ctx, input)
+	_, err := h.emailRepo.Create(ctx, input)
 
 	if err != nil {
-		slog.Error("failed to store sent email", "account_id", accountID, "message_id", msgID, "error", err)
-	} else {
-		slog.Debug("stored sent email", "account_id", accountID, "message_id", msgID)
+		return err
 	}
+
+	slog.Debug("stored sent email", "account_id", account.ID, "message_id", msgID)
+
+	return nil
 }
 
 var sendMessageFieldNames = map[string]string{
