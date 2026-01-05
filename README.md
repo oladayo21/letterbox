@@ -28,19 +28,72 @@ All endpoints require `X-API-Key` header.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/accounts` | Add IMAP account |
+| POST | `/accounts` | Add IMAP/SMTP account |
 | GET | `/accounts` | List accounts |
 | GET | `/accounts/{id}` | Get account |
 | DELETE | `/accounts/{id}` | Delete account |
 | GET | `/accounts/{id}/folders` | List folders |
 | GET | `/accounts/{id}/folders/{name}/messages` | List messages |
 | GET | `/accounts/{id}/messages/{uid}?folder=INBOX` | Get message (folder defaults to INBOX) |
+| POST | `/accounts/{id}/messages` | Send email (with reply/forward support) |
 | POST | `/webhooks` | Create webhook |
 | GET | `/webhooks` | List webhooks |
 | DELETE | `/webhooks/{id}` | Delete webhook |
 | GET | `/search?q=...&account_id=...` | Search emails |
 | GET | `/health` | Liveness check |
 | GET | `/ready` | Readiness check (DB, S3, sync status) |
+
+## Sending Emails
+
+Send emails via SMTP with optional reply/forward support.
+
+### Basic Send
+
+```json
+POST /accounts/{id}/messages
+{
+  "to": [{"name": "John", "email": "john@example.com"}],
+  "subject": "Hello",
+  "text": "Plain text body",
+  "html": "<p>HTML body</p>",
+  "attachments": [{
+    "filename": "doc.pdf",
+    "content_type": "application/pdf",
+    "data": "base64-encoded-content"
+  }]
+}
+```
+
+### Reply
+
+```json
+{
+  "to": [{"email": "original-sender@example.com"}],
+  "subject": "Re: Original Subject",
+  "text": "My reply",
+  "reply_to": 123,
+  "folder": "INBOX"
+}
+```
+
+Sets `In-Reply-To` and `References` headers for proper threading. Original message is quoted by default.
+
+### Forward
+
+```json
+{
+  "to": [{"email": "recipient@example.com"}],
+  "subject": "Fwd: Original Subject",
+  "text": "FYI",
+  "forward": 456,
+  "folder": "INBOX",
+  "include_attachments": true
+}
+```
+
+Options:
+- `quote_original`: Include quoted original (default: true)
+- `include_attachments`: Include original attachments (default: false)
 
 ## Webhooks
 

@@ -699,20 +699,20 @@ Each story is complete when:
 
 ---
 
-## Epic 7: SMTP Send
+## Epic 7: SMTP Send ✅
 *Send emails via configured SMTP accounts*
 
-### Story 7.1: SMTP Client
+### Story 7.1: SMTP Client ✅
 **Points**: 2
 
 Create SMTP client for sending emails.
 
 **Tasks**:
-- [ ] Create `internal/smtp/client.go`
-- [ ] Support STARTTLS and direct TLS
-- [ ] `SendEmail(host, port, user, pass, message) → error`
-- [ ] Connection test helper (similar to IMAP)
-- [ ] Handle common auth mechanisms (PLAIN, LOGIN)
+- [x] Create `internal/smtp/client.go`
+- [x] Support STARTTLS and direct TLS
+- [x] `SendEmail(host, port, user, pass, message) → error`
+- [x] Connection test helper (similar to IMAP)
+- [x] Handle common auth mechanisms (PLAIN, LOGIN)
 
 **Acceptance**:
 - Can send email through Gmail, Outlook, Fastmail
@@ -723,15 +723,15 @@ Create SMTP client for sending emails.
 
 ---
 
-### Story 7.2: SMTP Connection Test on Account Create
+### Story 7.2: SMTP Connection Test on Account Create ✅
 **Points**: 1
 
 Validate SMTP credentials when adding account.
 
 **Tasks**:
-- [ ] Extend `POST /accounts` to validate SMTP creds if provided
-- [ ] Test connection without sending (EHLO + AUTH only)
-- [ ] Return specific error for IMAP vs SMTP failures
+- [x] Extend `POST /accounts` to validate SMTP creds if provided
+- [x] Test connection without sending (EHLO + AUTH only)
+- [x] Return specific error for IMAP vs SMTP failures
 
 **Acceptance**:
 - Invalid SMTP creds → 400 with `smtp_error` field
@@ -741,15 +741,15 @@ Validate SMTP credentials when adding account.
 
 ---
 
-### Story 7.3: Compose Email Model
+### Story 7.3: Compose Email Model ✅
 **Points**: 1
 
 Define email composition structure.
 
 **Tasks**:
-- [ ] Create `ComposeEmail` struct (to, cc, bcc, subject, text, html, attachments)
-- [ ] Validate email addresses
-- [ ] Build RFC 2822 compliant message with MIME
+- [x] Create `ComposeEmail` struct (to, cc, bcc, subject, text, html, attachments)
+- [x] Validate email addresses
+- [x] Build RFC 2822 compliant message with MIME
 
 **Acceptance**:
 - Plain text email builds correctly
@@ -759,16 +759,16 @@ Define email composition structure.
 
 ---
 
-### Story 7.4: Send Email Endpoint
+### Story 7.4: Send Email Endpoint ✅
 **Points**: 2
 
 Expose email sending via REST.
 
 **Tasks**:
-- [ ] `POST /accounts/{id}/messages` - send new email
-- [ ] Accept JSON body with recipients, subject, body, attachments
-- [ ] Store sent email in local DB (mirror Sent folder)
-- [ ] Return message ID on success
+- [x] `POST /accounts/{id}/messages` - send new email
+- [x] Accept JSON body with recipients, subject, body, attachments
+- [x] Store sent email in local DB (mirror Sent folder)
+- [x] Return message ID on success
 
 **Acceptance**:
 - Can send plain text email via API
@@ -779,16 +779,16 @@ Expose email sending via REST.
 
 ---
 
-### Story 7.5: Reply & Forward Support
+### Story 7.5: Reply & Forward Support ✅
 **Points**: 2
 
 Handle reply threading and forwarding.
 
 **Tasks**:
-- [ ] Accept `reply_to` or `forward` parameter with original message UID
-- [ ] Set `In-Reply-To` and `References` headers for threading
-- [ ] Auto-quote original message in body (configurable)
-- [ ] Forward: include original attachments option
+- [x] Accept `reply_to` or `forward` parameter with original message UID
+- [x] Set `In-Reply-To` and `References` headers for threading
+- [x] Auto-quote original message in body (configurable)
+- [x] Forward: include original attachments option
 
 **Acceptance**:
 - Reply appears in same thread in email clients
