@@ -2,19 +2,24 @@ package api
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/oladayo21/letterbox/internal/composer"
 	"github.com/oladayo21/letterbox/internal/domain"
 	"github.com/oladayo21/letterbox/internal/imap"
 	"github.com/oladayo21/letterbox/internal/ingest"
 	"github.com/oladayo21/letterbox/internal/repository"
+	"github.com/oladayo21/letterbox/internal/smtp"
 	"github.com/oladayo21/letterbox/internal/storage"
 )
 
@@ -375,4 +380,280 @@ func (h *MessageHandler) GetMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, response)
+}
+
+// sendMessageRequest represents a request to send an email.
+type sendMessageRequest struct {
+	To          []domain.EmailAddress `json:"to" validate:"required,min=1,dive"`
+	CC          []domain.EmailAddress `json:"cc,omitempty"`
+	BCC         []domain.EmailAddress `json:"bcc,omitempty"`
+	Subject     string                `json:"subject" validate:"required"`
+	Text        string                `json:"text,omitempty"`
+	HTML        string                `json:"html,omitempty"`
+	Attachments []sendAttachmentInput `json:"attachments,omitempty"`
+}
+
+type sendAttachmentInput struct {
+	Filename    string `json:"filename" validate:"required"`
+	ContentType string `json:"content_type" validate:"required"`
+	Data        string `json:"data" validate:"required"` // Base64 encoded
+	IsInline    bool   `json:"is_inline,omitempty"`
+	ContentID   string `json:"content_id,omitempty"`
+}
+
+type sendMessageResponse struct {
+	MessageID string `json:"message_id"`
+	Success   bool   `json:"success"`
+}
+
+func (h *MessageHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
+	accountIDStr := chi.URLParam(r, "id")
+	accountID, err := uuid.Parse(accountIDStr)
+
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid account ID")
+
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 25<<20) // 25MB limit for attachments
+
+	var req sendMessageRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON")
+
+		return
+	}
+
+	if err := validate.Struct(req); err != nil {
+		writeError(w, http.StatusBadRequest, formatValidationError(err, sendMessageFieldNames))
+
+		return
+	}
+
+	// Require at least text or html
+	if req.Text == "" && req.HTML == "" {
+		writeError(w, http.StatusBadRequest, "at least text or html body is required")
+
+		return
+	}
+
+	// Get account with SMTP config
+	account, err := h.accountRepo.Get(r.Context(), accountID)
+
+	if errors.Is(err, repository.ErrAccountNotFound) {
+		writeError(w, http.StatusNotFound, "account not found")
+
+		return
+	}
+
+	if err != nil {
+		slog.Error("failed to get account", "account_id", accountID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to get account")
+
+		return
+	}
+
+	// Check SMTP is configured
+	if account.SmtpHost == "" {
+		writeError(w, http.StatusBadRequest, "SMTP not configured for this account")
+
+		return
+	}
+
+	// Build attachments
+	attachments, err := parseAttachments(req.Attachments)
+
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+
+		return
+	}
+
+	// Compose the email
+	email := composer.ComposeEmail{
+		From: domain.EmailAddress{
+			Name:  account.Name,
+			Email: account.ImapUser, // Use IMAP user as from address
+		},
+		To:          req.To,
+		CC:          req.CC,
+		BCC:         req.BCC,
+		Subject:     req.Subject,
+		Text:        req.Text,
+		HTML:        req.HTML,
+		Attachments: attachments,
+	}
+
+	rawMessage, err := email.Build()
+
+	if err != nil {
+		slog.Error("failed to build email", "error", err)
+		writeError(w, http.StatusBadRequest, "failed to build email: "+err.Error())
+
+		return
+	}
+
+	// Send via SMTP
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+
+	smtpCfg := smtp.Config{
+		Host:     account.SmtpHost,
+		Port:     account.SmtpPort,
+		Username: account.SmtpUser,
+		Password: account.SmtpPassword,
+	}
+
+	// Use IMAP user if SMTP user not set
+	if smtpCfg.Username == "" {
+		smtpCfg.Username = account.ImapUser
+		smtpCfg.Password = account.ImapPassword
+	}
+
+	err = smtp.SendEmail(ctx, smtpCfg, account.ImapUser, email.AllRecipients(), rawMessage)
+
+	if err != nil {
+		slog.Error("failed to send email", "account_id", accountID, "error", err)
+		writeError(w, http.StatusBadGateway, "failed to send email: "+classifySmtpError(err))
+
+		return
+	}
+
+	// Extract Message-ID from raw message for response
+	msgID := extractMessageID(rawMessage)
+
+	if msgID == "" {
+		slog.Warn("could not extract Message-ID from sent email", "account_id", accountID)
+	}
+
+	// Store sent email in local DB (synchronous to ensure storage)
+	if err := h.storeSentEmail(r.Context(), account, rawMessage, req); err != nil {
+		slog.Error("email sent but storage failed", "account_id", accountID, "message_id", msgID, "error", err)
+		// Still return success - email was sent, just not stored locally
+	}
+
+	slog.Info("email sent successfully", "account_id", accountID, "message_id", msgID, "recipients", len(email.AllRecipients()))
+
+	writeJSON(w, http.StatusOK, sendMessageResponse{
+		MessageID: msgID,
+		Success:   true,
+	})
+}
+
+func parseAttachments(inputs []sendAttachmentInput) ([]composer.Attachment, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+
+	attachments := make([]composer.Attachment, len(inputs))
+
+	for i, input := range inputs {
+		data, err := decodeBase64(input.Data)
+
+		if err != nil {
+			return nil, errors.New("invalid base64 data for attachment: " + input.Filename)
+		}
+
+		attachments[i] = composer.Attachment{
+			Filename:    input.Filename,
+			ContentType: input.ContentType,
+			Data:        data,
+			IsInline:    input.IsInline,
+			ContentID:   input.ContentID,
+		}
+	}
+
+	return attachments, nil
+}
+
+func extractMessageID(raw []byte) string {
+	// Simple extraction - look for Message-Id header
+	lines := string(raw)
+
+	for _, prefix := range []string{"Message-Id: ", "Message-ID: ", "message-id: "} {
+		start := 0
+
+		for {
+			idx := indexAt(lines, prefix, start)
+
+			if idx == -1 {
+				break
+			}
+
+			end := idx + len(prefix)
+
+			for end < len(lines) && lines[end] != '\r' && lines[end] != '\n' {
+				end++
+			}
+
+			return lines[idx+len(prefix) : end]
+		}
+	}
+
+	return ""
+}
+
+func indexAt(s, substr string, start int) int {
+	if start >= len(s) {
+		return -1
+	}
+
+	idx := strings.Index(s[start:], substr)
+
+	if idx == -1 {
+		return -1
+	}
+
+	return start + idx
+}
+
+func (h *MessageHandler) storeSentEmail(ctx context.Context, account *domain.Account, raw []byte, req sendMessageRequest) error {
+	// Parse the raw message to get Message-ID
+	msgID := extractMessageID(raw)
+
+	input := domain.CreateEmailInput{
+		AccountID:  account.ID,
+		UID:        0, // Sent emails don't have IMAP UID
+		MessageID:  msgID,
+		Folder:     "Sent",
+		Subject:    req.Subject,
+		FromEmail:  account.ImapUser,
+		FromName:   account.Name,
+		To:         req.To,
+		CC:         req.CC,
+		Date:       time.Now(),
+		ParsedText: req.Text,
+		ParsedHTML: req.HTML,
+		Raw:        string(raw),
+		Flags:      []string{"\\Seen"},
+	}
+
+	_, err := h.emailRepo.Create(ctx, input)
+
+	if err != nil {
+		return err
+	}
+
+	slog.Debug("stored sent email", "account_id", account.ID, "message_id", msgID)
+
+	return nil
+}
+
+var sendMessageFieldNames = map[string]string{
+	"To":          "to",
+	"CC":          "cc",
+	"BCC":         "bcc",
+	"Subject":     "subject",
+	"Text":        "text",
+	"HTML":        "html",
+	"Attachments": "attachments",
+	"Filename":    "filename",
+	"ContentType": "content_type",
+	"Data":        "data",
+}
+
+func decodeBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
 }
