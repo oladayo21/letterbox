@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -529,7 +530,13 @@ func (h *MessageHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 
 		if err != nil {
 			slog.Error("failed to build forward context", "account_id", accountID, "uid", *req.Forward, "error", err)
-			writeError(w, http.StatusInternalServerError, "failed to fetch original message")
+
+			// Provide specific error message for attachment failures
+			if strings.Contains(err.Error(), "attachment") {
+				writeError(w, http.StatusBadGateway, "failed to fetch original attachments: "+err.Error())
+			} else {
+				writeError(w, http.StatusInternalServerError, "failed to fetch original message")
+			}
 
 			return
 		}
@@ -810,8 +817,8 @@ func (h *MessageHandler) buildForwardContext(ctx context.Context, accountID uuid
 		attachments, err = h.fetchOriginalAttachments(ctx, original.Attachments)
 
 		if err != nil {
-			slog.Warn("failed to fetch some original attachments", "error", err)
-			// Continue without attachments rather than failing
+			// User explicitly requested attachments - fail if we can't include them all
+			return nil, nil, fmt.Errorf("fetching original attachments: %w", err)
 		}
 	}
 
@@ -825,9 +832,11 @@ func (h *MessageHandler) getOriginalEmail(ctx context.Context, accountID uuid.UU
 	if err == nil {
 		// Load attachments if needed
 		if email.Attachments == nil {
-			attachments, err := h.attachmentRepo.GetByEmailID(ctx, email.ID)
+			attachments, attErr := h.attachmentRepo.GetByEmailID(ctx, email.ID)
 
-			if err == nil {
+			if attErr != nil {
+				slog.Warn("failed to load attachments for original email", "email_id", email.ID, "error", attErr)
+			} else {
 				email.Attachments = attachments
 			}
 		}
@@ -851,14 +860,17 @@ func (h *MessageHandler) getOriginalEmail(ctx context.Context, accountID uuid.UU
 }
 
 // fetchOriginalAttachments downloads attachments from S3 for forwarding.
+// Returns the successfully downloaded attachments and an error if any failed.
 func (h *MessageHandler) fetchOriginalAttachments(ctx context.Context, attachments []domain.Attachment) ([]composer.Attachment, error) {
 	result := make([]composer.Attachment, 0, len(attachments))
+	var failed []string
 
 	for _, att := range attachments {
 		data, err := h.storage.Download(ctx, att.S3Key)
 
 		if err != nil {
-			slog.Warn("failed to download attachment for forward", "s3_key", att.S3Key, "error", err)
+			slog.Warn("failed to download attachment for forward", "filename", att.Filename, "s3_key", att.S3Key, "error", err)
+			failed = append(failed, att.Filename)
 
 			continue
 		}
@@ -868,6 +880,10 @@ func (h *MessageHandler) fetchOriginalAttachments(ctx context.Context, attachmen
 			ContentType: att.ContentType,
 			Data:        data,
 		})
+	}
+
+	if len(failed) > 0 {
+		return result, fmt.Errorf("failed to download %d attachment(s): %s", len(failed), strings.Join(failed, ", "))
 	}
 
 	return result, nil
@@ -897,46 +913,50 @@ func buildForwardSubject(subject string) string {
 }
 
 // extractReferences parses the References header from raw email.
+// Uses case-insensitive matching per RFC 2822.
 func extractReferences(raw string) []string {
-	// Look for References header
-	for _, prefix := range []string{"References: ", "references: "} {
-		idx := strings.Index(raw, prefix)
+	// Find "References:" header case-insensitively
+	rawLower := strings.ToLower(raw)
+	idx := strings.Index(rawLower, "references:")
 
-		if idx == -1 {
-			continue
-		}
-
-		// Find the end of the header (newline not followed by whitespace)
-		start := idx + len(prefix)
-		end := start
-
-		for end < len(raw) {
-			if raw[end] == '\r' || raw[end] == '\n' {
-				// Check if next line is a continuation (starts with whitespace)
-				next := end + 1
-
-				if next < len(raw) && raw[next] == '\n' {
-					next++
-				}
-
-				if next < len(raw) && (raw[next] == ' ' || raw[next] == '\t') {
-					end = next
-
-					continue
-				}
-
-				break
-			}
-			end++
-		}
-
-		headerValue := raw[start:end]
-
-		// Parse Message-IDs from the header value
-		return parseMessageIDs(headerValue)
+	if idx == -1 {
+		return nil
 	}
 
-	return nil
+	// Find the end of the header (newline not followed by whitespace)
+	start := idx + len("references:")
+
+	// Skip any whitespace after the colon
+	for start < len(raw) && (raw[start] == ' ' || raw[start] == '\t') {
+		start++
+	}
+
+	end := start
+
+	for end < len(raw) {
+		if raw[end] == '\r' || raw[end] == '\n' {
+			// Check if next line is a continuation (starts with whitespace)
+			next := end + 1
+
+			if next < len(raw) && raw[next] == '\n' {
+				next++
+			}
+
+			if next < len(raw) && (raw[next] == ' ' || raw[next] == '\t') {
+				end = next
+
+				continue
+			}
+
+			break
+		}
+		end++
+	}
+
+	headerValue := raw[start:end]
+
+	// Parse Message-IDs from the header value
+	return parseMessageIDs(headerValue)
 }
 
 // parseMessageIDs extracts all <...> message IDs from a string.
@@ -974,13 +994,18 @@ func quoteHTMLBody(html, fromName, fromEmail string, date time.Time) string {
 		return ""
 	}
 
-	attribution := formatAttribution(fromName, fromEmail, date)
+	// Escape attribution to prevent XSS from malicious sender names
+	attribution := escapeHTML(formatAttribution(fromName, fromEmail, date))
 
 	return `<br><br><div class="quote">` + attribution + `<blockquote style="margin:0 0 0 0.8ex;border-left:1px solid #ccc;padding-left:1ex">` + html + `</blockquote></div>`
 }
 
 // quoteForwardTextBody formats original email for text forward.
 func quoteForwardTextBody(original *domain.Email) string {
+	if original.ParsedText == "" && original.ParsedHTML == "" {
+		return ""
+	}
+
 	var sb strings.Builder
 
 	sb.WriteString("\n\n---------- Forwarded message ----------\n")
