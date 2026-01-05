@@ -391,6 +391,13 @@ type sendMessageRequest struct {
 	Text        string                `json:"text,omitempty"`
 	HTML        string                `json:"html,omitempty"`
 	Attachments []sendAttachmentInput `json:"attachments,omitempty"`
+
+	// Reply/Forward options
+	ReplyTo            *int64 `json:"reply_to,omitempty"`            // Original message UID to reply to
+	Forward            *int64 `json:"forward,omitempty"`             // Original message UID to forward
+	Folder             string `json:"folder,omitempty"`              // Folder of original message (default: INBOX)
+	IncludeAttachments bool   `json:"include_attachments,omitempty"` // Include original attachments (for forward)
+	QuoteOriginal      *bool  `json:"quote_original,omitempty"`      // Quote original message (default: true)
 }
 
 type sendAttachmentInput struct {
@@ -432,6 +439,13 @@ func (h *MessageHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate reply_to and forward are mutually exclusive
+	if req.ReplyTo != nil && req.Forward != nil {
+		writeError(w, http.StatusBadRequest, "cannot specify both reply_to and forward")
+
+		return
+	}
+
 	// Require at least text or html
 	if req.Text == "" && req.HTML == "" {
 		writeError(w, http.StatusBadRequest, "at least text or html body is required")
@@ -462,13 +476,66 @@ func (h *MessageHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build attachments
+	// Build attachments from request
 	attachments, err := parseAttachments(req.Attachments)
 
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 
 		return
+	}
+
+	// Default folder is INBOX
+	folder := req.Folder
+
+	if folder == "" {
+		folder = "INBOX"
+	}
+
+	// Default quoteOriginal is true
+	quoteOriginal := true
+
+	if req.QuoteOriginal != nil {
+		quoteOriginal = *req.QuoteOriginal
+	}
+
+	// Handle reply/forward context
+	var rfCtx *replyForwardContext
+
+	if req.ReplyTo != nil {
+		rfCtx, err = h.buildReplyContext(r.Context(), accountID, folder, *req.ReplyTo, quoteOriginal)
+
+		if errors.Is(err, repository.ErrEmailNotFound) || errors.Is(err, imap.ErrMessageNotFound) {
+			writeError(w, http.StatusNotFound, "original message not found")
+
+			return
+		}
+
+		if err != nil {
+			slog.Error("failed to build reply context", "account_id", accountID, "uid", *req.ReplyTo, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to fetch original message")
+
+			return
+		}
+	} else if req.Forward != nil {
+		var forwardAttachments []composer.Attachment
+		rfCtx, forwardAttachments, err = h.buildForwardContext(r.Context(), accountID, folder, *req.Forward, quoteOriginal, req.IncludeAttachments)
+
+		if errors.Is(err, repository.ErrEmailNotFound) || errors.Is(err, imap.ErrMessageNotFound) {
+			writeError(w, http.StatusNotFound, "original message not found")
+
+			return
+		}
+
+		if err != nil {
+			slog.Error("failed to build forward context", "account_id", accountID, "uid", *req.Forward, "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to fetch original message")
+
+			return
+		}
+
+		// Prepend original attachments
+		attachments = append(forwardAttachments, attachments...)
 	}
 
 	// Compose the email
@@ -484,6 +551,30 @@ func (h *MessageHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		Text:        req.Text,
 		HTML:        req.HTML,
 		Attachments: attachments,
+	}
+
+	// Apply reply/forward context
+	if rfCtx != nil {
+		// Use subject from context if user's subject matches the default pattern
+		// This allows user to override subject if they want
+		if req.ReplyTo != nil && req.Subject == "" {
+			email.Subject = rfCtx.Subject
+		} else if req.Forward != nil && req.Subject == "" {
+			email.Subject = rfCtx.Subject
+		}
+
+		// Set threading headers for replies
+		email.InReplyTo = rfCtx.InReplyTo
+		email.References = rfCtx.References
+
+		// Append quoted content
+		if rfCtx.QuotedText != "" {
+			email.Text = email.Text + rfCtx.QuotedText
+		}
+
+		if rfCtx.QuotedHTML != "" {
+			email.HTML = email.HTML + rfCtx.QuotedHTML
+		}
 	}
 
 	rawMessage, err := email.Build()
@@ -652,8 +743,338 @@ var sendMessageFieldNames = map[string]string{
 	"Filename":    "filename",
 	"ContentType": "content_type",
 	"Data":        "data",
+	"ReplyTo":     "reply_to",
+	"Forward":     "forward",
+	"Folder":      "folder",
 }
 
 func decodeBase64(s string) ([]byte, error) {
 	return base64.StdEncoding.DecodeString(s)
+}
+
+// replyForwardContext holds data extracted from the original email for reply/forward.
+type replyForwardContext struct {
+	InReplyTo  string
+	References []string
+	Subject    string
+	QuotedText string
+	QuotedHTML string
+}
+
+// buildReplyContext fetches the original email and builds reply threading context.
+func (h *MessageHandler) buildReplyContext(ctx context.Context, accountID uuid.UUID, folder string, uid int64, quoteOriginal bool) (*replyForwardContext, error) {
+	original, err := h.getOriginalEmail(ctx, accountID, folder, uid)
+
+	if err != nil {
+		return nil, err
+	}
+
+	rfc := &replyForwardContext{
+		InReplyTo: original.MessageID,
+		Subject:   buildReplySubject(original.Subject),
+	}
+
+	// Build References header: original's References + original's Message-ID
+	if original.MessageID != "" {
+		rfc.References = append(extractReferences(original.Raw), original.MessageID)
+	}
+
+	if quoteOriginal {
+		rfc.QuotedText = quoteTextBody(original.ParsedText, original.FromName, original.FromEmail, original.Date)
+		rfc.QuotedHTML = quoteHTMLBody(original.ParsedHTML, original.FromName, original.FromEmail, original.Date)
+	}
+
+	return rfc, nil
+}
+
+// buildForwardContext fetches the original email and builds forward context.
+func (h *MessageHandler) buildForwardContext(ctx context.Context, accountID uuid.UUID, folder string, uid int64, quoteOriginal bool, includeAttachments bool) (*replyForwardContext, []composer.Attachment, error) {
+	original, err := h.getOriginalEmail(ctx, accountID, folder, uid)
+
+	if err != nil {
+		return nil, nil, err
+	}
+
+	rfc := &replyForwardContext{
+		Subject: buildForwardSubject(original.Subject),
+	}
+
+	if quoteOriginal {
+		rfc.QuotedText = quoteForwardTextBody(original)
+		rfc.QuotedHTML = quoteForwardHTMLBody(original)
+	}
+
+	var attachments []composer.Attachment
+
+	if includeAttachments && len(original.Attachments) > 0 {
+		attachments, err = h.fetchOriginalAttachments(ctx, original.Attachments)
+
+		if err != nil {
+			slog.Warn("failed to fetch some original attachments", "error", err)
+			// Continue without attachments rather than failing
+		}
+	}
+
+	return rfc, attachments, nil
+}
+
+// getOriginalEmail fetches an email by UID, trying local DB first then IMAP.
+func (h *MessageHandler) getOriginalEmail(ctx context.Context, accountID uuid.UUID, folder string, uid int64) (*domain.Email, error) {
+	email, err := h.emailRepo.GetByUID(ctx, accountID, folder, uid)
+
+	if err == nil {
+		// Load attachments if needed
+		if email.Attachments == nil {
+			attachments, err := h.attachmentRepo.GetByEmailID(ctx, email.ID)
+
+			if err == nil {
+				email.Attachments = attachments
+			}
+		}
+
+		return email, nil
+	}
+
+	if !errors.Is(err, repository.ErrEmailNotFound) {
+		return nil, err
+	}
+
+	// Try to fetch from IMAP
+	email, err = h.ingester.IngestEmail(ctx, accountID, folder, uint32(uid))
+
+	if errors.Is(err, ingest.ErrEmailAlreadyExists) {
+		// Race condition - another request ingested it
+		return h.emailRepo.GetByUID(ctx, accountID, folder, uid)
+	}
+
+	return email, err
+}
+
+// fetchOriginalAttachments downloads attachments from S3 for forwarding.
+func (h *MessageHandler) fetchOriginalAttachments(ctx context.Context, attachments []domain.Attachment) ([]composer.Attachment, error) {
+	result := make([]composer.Attachment, 0, len(attachments))
+
+	for _, att := range attachments {
+		data, err := h.storage.Download(ctx, att.S3Key)
+
+		if err != nil {
+			slog.Warn("failed to download attachment for forward", "s3_key", att.S3Key, "error", err)
+
+			continue
+		}
+
+		result = append(result, composer.Attachment{
+			Filename:    att.Filename,
+			ContentType: att.ContentType,
+			Data:        data,
+		})
+	}
+
+	return result, nil
+}
+
+// buildReplySubject adds "Re: " prefix if not already present.
+func buildReplySubject(subject string) string {
+	trimmed := strings.TrimSpace(subject)
+
+	if strings.HasPrefix(strings.ToLower(trimmed), "re:") {
+		return trimmed
+	}
+
+	return "Re: " + trimmed
+}
+
+// buildForwardSubject adds "Fwd: " prefix if not already present.
+func buildForwardSubject(subject string) string {
+	trimmed := strings.TrimSpace(subject)
+	lower := strings.ToLower(trimmed)
+
+	if strings.HasPrefix(lower, "fwd:") || strings.HasPrefix(lower, "fw:") {
+		return trimmed
+	}
+
+	return "Fwd: " + trimmed
+}
+
+// extractReferences parses the References header from raw email.
+func extractReferences(raw string) []string {
+	// Look for References header
+	for _, prefix := range []string{"References: ", "references: "} {
+		idx := strings.Index(raw, prefix)
+
+		if idx == -1 {
+			continue
+		}
+
+		// Find the end of the header (newline not followed by whitespace)
+		start := idx + len(prefix)
+		end := start
+
+		for end < len(raw) {
+			if raw[end] == '\r' || raw[end] == '\n' {
+				// Check if next line is a continuation (starts with whitespace)
+				next := end + 1
+
+				if next < len(raw) && raw[next] == '\n' {
+					next++
+				}
+
+				if next < len(raw) && (raw[next] == ' ' || raw[next] == '\t') {
+					end = next
+
+					continue
+				}
+
+				break
+			}
+			end++
+		}
+
+		headerValue := raw[start:end]
+
+		// Parse Message-IDs from the header value
+		return parseMessageIDs(headerValue)
+	}
+
+	return nil
+}
+
+// parseMessageIDs extracts all <...> message IDs from a string.
+func parseMessageIDs(s string) []string {
+	var ids []string
+	start := -1
+
+	for i, c := range s {
+		if c == '<' {
+			start = i
+		} else if c == '>' && start >= 0 {
+			ids = append(ids, s[start:i+1])
+			start = -1
+		}
+	}
+
+	return ids
+}
+
+// quoteTextBody quotes plain text content for reply.
+func quoteTextBody(text, fromName, fromEmail string, date time.Time) string {
+	if text == "" {
+		return ""
+	}
+
+	attribution := formatAttribution(fromName, fromEmail, date)
+	quoted := quoteLines(text)
+
+	return "\n\n" + attribution + "\n" + quoted
+}
+
+// quoteHTMLBody quotes HTML content for reply.
+func quoteHTMLBody(html, fromName, fromEmail string, date time.Time) string {
+	if html == "" {
+		return ""
+	}
+
+	attribution := formatAttribution(fromName, fromEmail, date)
+
+	return `<br><br><div class="quote">` + attribution + `<blockquote style="margin:0 0 0 0.8ex;border-left:1px solid #ccc;padding-left:1ex">` + html + `</blockquote></div>`
+}
+
+// quoteForwardTextBody formats original email for text forward.
+func quoteForwardTextBody(original *domain.Email) string {
+	var sb strings.Builder
+
+	sb.WriteString("\n\n---------- Forwarded message ----------\n")
+	sb.WriteString("From: " + formatAddress(original.FromName, original.FromEmail) + "\n")
+	sb.WriteString("Date: " + original.Date.Format("Mon, 2 Jan 2006 15:04:05 -0700") + "\n")
+	sb.WriteString("Subject: " + original.Subject + "\n")
+
+	if len(original.To) > 0 {
+		sb.WriteString("To: " + formatAddressList(original.To) + "\n")
+	}
+
+	sb.WriteString("\n")
+	sb.WriteString(original.ParsedText)
+
+	return sb.String()
+}
+
+// quoteForwardHTMLBody formats original email for HTML forward.
+func quoteForwardHTMLBody(original *domain.Email) string {
+	if original.ParsedHTML == "" && original.ParsedText == "" {
+		return ""
+	}
+
+	var sb strings.Builder
+
+	sb.WriteString(`<br><br><div class="forward">`)
+	sb.WriteString(`<div style="border-bottom:1px solid #ccc;padding-bottom:10px;margin-bottom:10px">`)
+	sb.WriteString(`<b>---------- Forwarded message ----------</b><br>`)
+	sb.WriteString(`<b>From:</b> ` + escapeHTML(formatAddress(original.FromName, original.FromEmail)) + `<br>`)
+	sb.WriteString(`<b>Date:</b> ` + original.Date.Format("Mon, 2 Jan 2006 15:04:05 -0700") + `<br>`)
+	sb.WriteString(`<b>Subject:</b> ` + escapeHTML(original.Subject) + `<br>`)
+
+	if len(original.To) > 0 {
+		sb.WriteString(`<b>To:</b> ` + escapeHTML(formatAddressList(original.To)) + `<br>`)
+	}
+
+	sb.WriteString(`</div>`)
+
+	if original.ParsedHTML != "" {
+		sb.WriteString(original.ParsedHTML)
+	} else {
+		sb.WriteString(`<pre>` + escapeHTML(original.ParsedText) + `</pre>`)
+	}
+
+	sb.WriteString(`</div>`)
+
+	return sb.String()
+}
+
+// formatAttribution creates the "On ... wrote:" line.
+func formatAttribution(fromName, fromEmail string, date time.Time) string {
+	dateStr := date.Format("Mon, 2 Jan 2006 at 15:04")
+	sender := formatAddress(fromName, fromEmail)
+
+	return "On " + dateStr + ", " + sender + " wrote:"
+}
+
+// formatAddress formats a name/email pair.
+func formatAddress(name, email string) string {
+	if name == "" {
+		return email
+	}
+
+	return name + " <" + email + ">"
+}
+
+// formatAddressList formats a list of addresses.
+func formatAddressList(addrs []domain.EmailAddress) string {
+	parts := make([]string, len(addrs))
+
+	for i, addr := range addrs {
+		parts[i] = formatAddress(addr.Name, addr.Email)
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// quoteLines prefixes each line with "> ".
+func quoteLines(text string) string {
+	lines := strings.Split(text, "\n")
+
+	for i, line := range lines {
+		lines[i] = "> " + line
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// escapeHTML escapes HTML special characters.
+func escapeHTML(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+
+	return s
 }
